@@ -9,12 +9,13 @@ does two jobs with one codebase:
    polls /api/calls, /api/ptps, /api/payment_links, /api/events and shows
    you what the agent has actually done, in real time.
 
-2. WEB CALL — the "🎙️ Web Call" tab opens the Vapi browser Web SDK in a
-   normal HTTPS page served by the FastAPI backend. This is a REAL voice
-   call (Vapi <-> your mic/speakers), not a simulation. The separate page
-   avoids Streamlit's sandboxed component iframe, which can give Daily a
-   `null` origin. The backend serves only the client-safe Vapi public key
-   and assistant ID to that page.
+2. WEB CALL — the "🎙️ Web Call" tab embeds Vapi's browser Web SDK so you
+   can talk to the real agent over your microphone, right from this page.
+   This is a REAL voice call (Vapi <-> your mic/speakers), not a
+   simulation — Vapi calls the exact same /tools/* endpoints below while
+   you talk. It needs VAPI_PUBLIC_KEY and VAPI_ASSISTANT_ID (see
+   .env.example); the Call Simulator tab keeps working with zero Vapi
+   account needed, for demos/dev without a mic or Vapi credentials.
 
 3. SIMULATOR — the "Call Simulator" tab lets you role-play the caller side
    of a conversation and fire the exact same tool calls Vapi would fire
@@ -25,19 +26,27 @@ does two jobs with one codebase:
 
 Run with:  streamlit run app.py
 Set BACKEND_URL as an env var if the backend isn't on localhost:8000.
-For the Web Call page, set VAPI_PUBLIC_KEY and VAPI_ASSISTANT_ID on the FastAPI/Render service.
+For the Web Call tab, also set VAPI_PUBLIC_KEY and VAPI_ASSISTANT_ID.
 """
 
 import os
 import json
-from urllib.parse import urlencode
 import time
 import datetime
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
+# Client-safe values only. VAPI_PUBLIC_KEY is Vapi's browser/public key (by
+# design, safe to ship to the browser — it cannot manage your account, only
+# start calls). VAPI_ASSISTANT_ID identifies the assistant to call; it is
+# not a secret either. Nothing that requires the private VAPI_API_KEY
+# (used only server-side by scripts/render_vapi_config.py) is ever read
+# here or sent to the browser.
+VAPI_PUBLIC_KEY = os.environ.get("VAPI_PUBLIC_KEY", "")
+VAPI_ASSISTANT_ID = os.environ.get("VAPI_ASSISTANT_ID", "")
 
 st.set_page_config(page_title="Maya — Kapture Finance Collections", page_icon="📞", layout="wide")
 
@@ -187,62 +196,234 @@ with tab_monitor:
 # ---------------------------------------------------------------------------
 # TAB — Web Call (real Vapi voice call from the browser)
 # ---------------------------------------------------------------------------
-# The actual Vapi Web SDK is NOT embedded with components.html(). Streamlit
-# renders components.html() in a sandboxed iframe whose origin can be `null`;
-# Daily's call-machine uses postMessage and rejects that origin. Instead, the
-# FastAPI backend serves /webcall as a normal HTTPS page. The browser opens that
-# page directly, so Vapi/Daily run with a real origin (e.g.
-# https://ai-collections-agent.onrender.com).
+#
+# This embeds Vapi's browser Web SDK (loaded from Vapi's CDN as an ES module
+# — no npm/build step needed, matches the current documented API at
+# https://docs.vapi.ai/documentation/get-started/make-a-web-call):
+#
+#   const vapi = new Vapi(PUBLIC_KEY);
+#   vapi.start(ASSISTANT_ID, { assistantOverrides: { variableValues: {...} } });
+#
+# Only the PUBLIC key and the assistant ID (both explicitly client-safe —
+# see .env.example) ever reach the browser. Tool calls (verify_customer,
+# log_promise_to_pay, ...) happen server-to-server between Vapi's cloud and
+# BACKEND_URL — this component never talks to the backend directly, and
+# never sees VAPI_API_KEY.
+
+def _vapi_webcall_component_html(public_key, assistant_id, customer_phone, customer_name, outstanding_display):
+    # json.dumps for safe embedding as JS string/number literals (escapes
+    # quotes, no way for a customer field to break out of the <script>).
+    public_key_js = json.dumps(public_key)
+    assistant_id_js = json.dumps(assistant_id)
+    phone_js = json.dumps(customer_phone or "")
+    name_js = json.dumps(customer_name or "")
+    outstanding_js = json.dumps(outstanding_display or "")
+
+    return f"""
+<div id="vapi-root" style="font-family: -apple-system, Segoe UI, sans-serif;">
+  <div id="vapi-status" style="font-size:16px; font-weight:600; margin-bottom:10px;">Status: Ready</div>
+  <div>
+    <button id="vapi-start-btn" style="background:#16a34a;color:white;border:none;padding:10px 18px;
+      border-radius:6px;font-size:15px;cursor:pointer;">🎙️ Start AI Voice Call</button>
+    <button id="vapi-end-btn" style="background:#dc2626;color:white;border:none;padding:10px 18px;
+      border-radius:6px;font-size:15px;cursor:pointer;margin-left:8px;display:none;">🔴 End Call</button>
+    <button id="vapi-mute-btn" style="background:#6b7280;color:white;border:none;padding:10px 14px;
+      border-radius:6px;font-size:15px;cursor:pointer;margin-left:8px;display:none;">🔇 Mute</button>
+  </div>
+  <div id="vapi-callid" style="margin-top:10px;font-size:12px;color:#6b7280;"></div>
+  <div id="vapi-error" style="margin-top:10px;color:#dc2626;font-weight:600;white-space:pre-wrap;"></div>
+  <div id="vapi-log" style="margin-top:12px;height:190px;overflow-y:auto;background:#f8fafc;
+    border:1px solid #e2e8f0;border-radius:6px;padding:8px;font-size:13px;line-height:1.5;"></div>
+</div>
+<script type="module">
+  const statusEl = document.getElementById('vapi-status');
+  const startBtn = document.getElementById('vapi-start-btn');
+  const endBtn = document.getElementById('vapi-end-btn');
+  const muteBtn = document.getElementById('vapi-mute-btn');
+  const callIdEl = document.getElementById('vapi-callid');
+  const errEl = document.getElementById('vapi-error');
+  const logEl = document.getElementById('vapi-log');
+
+  function setStatus(text) {{ statusEl.textContent = 'Status: ' + text; }}
+  function showError(msg) {{ errEl.textContent = String(msg); }}
+  function clearError() {{ errEl.textContent = ''; }}
+  function log(line) {{
+    const row = document.createElement('div');
+    row.textContent = line;
+    logEl.appendChild(row);
+    logEl.scrollTop = logEl.scrollHeight;
+  }}
+
+  const PUBLIC_KEY = {public_key_js};
+  const ASSISTANT_ID = {assistant_id_js};
+  const CUSTOMER_PHONE = {phone_js};
+  const CUSTOMER_NAME = {name_js};
+  const OUTSTANDING = {outstanding_js};
+
+  let vapi;
+  try {{
+    const {{ default: Vapi }} = await import('https://esm.sh/@vapi-ai/web@latest');
+    vapi = new Vapi(PUBLIC_KEY);
+  }} catch (e) {{
+    setStatus('🔴 Failed to load Vapi SDK');
+    showError('Could not load the Vapi Web SDK from esm.sh. Check your network/firewall '
+      + '(this CDN must be reachable from the browser, not the Streamlit server), then reload. '
+      + String(e));
+  }}
+
+  if (vapi) {{
+    vapi.on('call-start', () => {{
+      clearError();
+      setStatus('🟢 AI Call Connected');
+      startBtn.style.display = 'none';
+      endBtn.style.display = 'inline-block';
+      muteBtn.style.display = 'inline-block';
+      log('Call connected.');
+      try {{
+        const id = (vapi.call && vapi.call.id) || null;
+        if (id) callIdEl.textContent = 'Call ID: ' + id + '  (paste into the Live Monitor lookup below)';
+      }} catch (e) {{ /* call id not exposed by this SDK version — non-fatal */ }}
+    }});
+
+    vapi.on('call-end', () => {{
+      setStatus('⚪ Call Ended');
+      startBtn.style.display = 'inline-block';
+      endBtn.style.display = 'none';
+      muteBtn.style.display = 'none';
+      log('Call ended.');
+    }});
+
+    vapi.on('error', (e) => {{
+      setStatus('🔴 Error');
+      startBtn.style.display = 'inline-block';
+      endBtn.style.display = 'none';
+      muteBtn.style.display = 'none';
+      const msg = (e && (e.message || e.errorMsg || JSON.stringify(e))) || 'Unknown error';
+      showError(msg);
+      log('Error: ' + msg);
+    }});
+
+    vapi.on('message', (msg) => {{
+      if (!msg || !msg.type) return;
+      if (msg.type === 'transcript' && msg.transcriptType === 'final') {{
+        log((msg.role || 'unknown') + ': ' + msg.transcript);
+      }} else if (msg.type === 'tool-calls') {{
+        const names = (msg.toolCalls || msg.toolCallList || [])
+          .map(tc => (tc.function && tc.function.name) || tc.name).filter(Boolean).join(', ');
+        log('🔧 tool call: ' + (names || '(unknown tool)'));
+      }} else if (msg.type === 'status-update') {{
+        log('status: ' + msg.status);
+      }}
+    }});
+
+    startBtn.onclick = async () => {{
+      clearError();
+      setStatus('🟡 Connecting...');
+      logEl.innerHTML = '';
+      callIdEl.textContent = '';
+      try {{
+        await vapi.start(ASSISTANT_ID, {{
+          variableValues: {{
+            customer_phone: CUSTOMER_PHONE,
+            customer_name: CUSTOMER_NAME,
+            outstanding_amount: OUTSTANDING,
+          }},
+        }});
+      }} catch (e) {{
+        setStatus('🔴 Failed to start call');
+        const msg = (e && e.message) ? e.message : String(e);
+        if (/permission|NotAllowedError|denied/i.test(msg)) {{
+          showError('Microphone permission was denied. Allow microphone access for this site and try again.');
+        }} else if (/assistant/i.test(msg)) {{
+          showError('Vapi rejected the assistant ID. Confirm VAPI_ASSISTANT_ID matches a deployed assistant. ' + msg);
+        }} else {{
+          showError('Could not start the call: ' + msg);
+        }}
+      }}
+    }};
+
+    endBtn.onclick = () => {{ try {{ vapi.stop(); }} catch (e) {{ showError(String(e)); }} }};
+
+    muteBtn.onclick = () => {{
+      try {{
+        const nowMuted = !vapi.isMuted();
+        vapi.setMuted(nowMuted);
+        muteBtn.textContent = nowMuted ? '🔊 Unmute' : '🔇 Mute';
+      }} catch (e) {{ showError(String(e)); }}
+    }};
+  }}
+</script>
+"""
+
 
 with tab_webcall:
     st.subheader("🎙️ Real Vapi Web Call")
     st.caption(
-        "The Web Call opens in a separate browser tab served directly by the FastAPI backend. "
-        "This avoids Streamlit's sandboxed iframe, which can give Daily a `null` browser origin."
+        "This starts an actual voice call in your browser via Vapi's Web SDK — real microphone, "
+        "real speech-to-text, real Maya. Tool calls land on the same backend endpoints shown in "
+        "the Call Simulator tab, so anything the agent does here shows up in Live Monitor too."
     )
 
-    webcall_customers = api_get("/api/customers")
-    if not webcall_customers:
-        st.info("No customers loaded — is the backend running?")
+    missing = [name for name, val in [("VAPI_PUBLIC_KEY", VAPI_PUBLIC_KEY), ("VAPI_ASSISTANT_ID", VAPI_ASSISTANT_ID)] if not val]
+    if missing:
+        st.warning(
+            f"Missing environment variable(s): {', '.join(missing)}. Set these (see `.env.example`) "
+            "and restart the dashboard to enable the Web Call tab. VAPI_ASSISTANT_ID must point at an "
+            "assistant you've already deployed with `python scripts/render_vapi_config.py --deploy` "
+            "(see docs/VAPI_DEPLOYMENT.md) — this tab reuses that assistant, it does not create a new one."
+        )
     else:
-        wc_options = {f"{c['full_name']} ({c['phone']})": c for c in webcall_customers}
-        wc_default = next((k for k in wc_options if "Rahul Sharma" in k), list(wc_options.keys())[0])
-        wc_label = st.selectbox(
-            "Customer for this call", options=list(wc_options.keys()),
-            index=list(wc_options.keys()).index(wc_default), key="webcall_customer_select",
-        )
-        wc_customer = wc_options[wc_label]
+        webcall_customers = api_get("/api/customers")
+        if not webcall_customers:
+            st.info("No customers loaded — is the backend running?")
+        else:
+            wc_options = {f"{c['full_name']} ({c['phone']})": c for c in webcall_customers}
+            wc_default = next((k for k in wc_options if "Rahul Sharma" in k), list(wc_options.keys())[0])
+            wc_label = st.selectbox(
+                "Customer for this call", options=list(wc_options.keys()),
+                index=list(wc_options.keys()).index(wc_default), key="webcall_customer_select",
+            )
+            wc_customer = wc_options[wc_label]
 
-        info1, info2, info3 = st.columns(3)
-        info1.metric("Customer", wc_customer["full_name"])
-        info2.metric("Outstanding", inr(wc_customer["overdue_amount_cents"]))
-        info3.metric("Days past due", wc_customer["days_past_due"])
-        st.caption(
-            f"{wc_customer['loan_type']} — the agent will not disclose any of this out loud until "
-            "it verifies the caller's identity (full name, DOB, last 4 of the loan account), exactly "
-            "like the phone-call flow."
-        )
+            info1, info2, info3 = st.columns(3)
+            info1.metric("Customer", wc_customer["full_name"])
+            info2.metric("Outstanding", inr(wc_customer["overdue_amount_cents"]))
+            info3.metric("Days past due", wc_customer["days_past_due"])
+            st.caption(
+                f"{wc_customer['loan_type']} — the agent will not disclose any of this out loud until "
+                "it verifies the caller's identity (full name, DOB, last 4 of the loan account), exactly "
+                "like the phone-call flow."
+            )
 
-        webcall_url = f"{BACKEND_URL.rstrip('/')}/webcall?{urlencode({'customer_id': wc_customer['customer_id']})}"
-        st.link_button("🎙️ Open Real AI Voice Call", webcall_url, use_container_width=True)
-        st.caption(
-            "The call page is hosted by the backend over HTTPS. Allow microphone access when Chrome asks. "
-            "You can keep this dashboard open in another tab to watch Live Monitor events."
-        )
+            components.html(
+                _vapi_webcall_component_html(
+                    public_key=VAPI_PUBLIC_KEY,
+                    assistant_id=VAPI_ASSISTANT_ID,
+                    customer_phone=wc_customer["phone"],
+                    customer_name=wc_customer["full_name"],
+                    outstanding_display=inr(wc_customer["overdue_amount_cents"]),
+                ),
+                height=420,
+            )
 
-        st.divider()
-        st.markdown("##### 🔎 Look up this call in Live Monitor")
-        lookup_id = st.text_input(
-            "Paste the Call ID shown on the Web Call page", key="webcall_lookup_call_id",
-            help="Copy the Call ID from the Web Call page after 'AI Call Connected' to pull that call's tool-call history.",
-        )
-        if st.button("🔍 Show events for this call", key="webcall_lookup_btn") and lookup_id:
-            wc_events = api_get("/api/events", params={"call_id": lookup_id})
-            if wc_events:
-                st.dataframe(pd.DataFrame(wc_events)[["created_at", "kind", "detail"]],
-                             use_container_width=True, hide_index=True)
-            else:
-                st.caption("No events yet for that call ID — the agent may not have called a tool yet.")
+            st.divider()
+            st.caption(
+                "Browser mic access requires either `https://` or `localhost` — if you're on a plain-http "
+                "public URL, the browser will block the microphone before Vapi even gets involved."
+            )
+            st.markdown("##### 🔎 Look up this call in Live Monitor")
+            lookup_id = st.text_input(
+                "Paste the Call ID shown above once connected", key="webcall_lookup_call_id",
+                help="The widget can't write back into this Python app directly, so copy the Call ID "
+                     "it shows after 'AI Call Connected' here to pull that call's tool-call history.",
+            )
+            if st.button("🔍 Show events for this call", key="webcall_lookup_btn") and lookup_id:
+                wc_events = api_get("/api/events", params={"call_id": lookup_id})
+                if wc_events:
+                    st.dataframe(pd.DataFrame(wc_events)[["created_at", "kind", "detail"]],
+                                 use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No events yet for that call ID — the agent may not have called a tool yet.")
 
 
 # ---------------------------------------------------------------------------

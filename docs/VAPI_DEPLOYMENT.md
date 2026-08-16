@@ -129,9 +129,9 @@ All defined in `.env.example` (copy to `.env`, never commit `.env`):
 | `BACKEND_URL` | `dashboard/app.py`, `scripts/render_vapi_config.py` | Dashboard pointing at the right backend; rendering tool URLs into the Vapi config |
 | `VAPI_VOICE_ID` | `scripts/render_vapi_config.py` | Selecting Maya's voice |
 | `VAPI_API_KEY` | `scripts/render_vapi_config.py --deploy` | Creating/updating the assistant via Vapi's API |
-| `VAPI_ASSISTANT_ID` | `scripts/render_vapi_config.py --deploy` | Updating the same assistant on repeat deploys instead of creating new ones |
+| `VAPI_ASSISTANT_ID` | `scripts/render_vapi_config.py --deploy`, FastAPI `/api/webcall-config` | Updating/reusing the same deployed assistant and starting Web Calls |
 | `VAPI_PHONE_NUMBER_ID` | Not consumed by any script; reference only | Attaching the assistant to a phone number in the Vapi dashboard (Phone Numbers tab → assign assistant) |
-| `VAPI_PUBLIC_KEY` | `dashboard/app.py` (🎙️ Web Call tab only) | Letting the browser start a Vapi Web Call. Client-safe by design — never used server-side, never confused with `VAPI_API_KEY` |
+| `VAPI_PUBLIC_KEY` | FastAPI `/api/webcall-config` | Letting the browser start a Vapi Web Call. Client-safe by design; the FastAPI `/webcall` page serves it to the browser |
 
 ## 4. Tool URLs
 
@@ -180,13 +180,16 @@ endpoints exactly as in a phone call, so §1 (a public HTTPS `BACKEND_URL`, e.g.
 required. Web Call only removes the "buy/assign a phone number" step of §5.
 
 **Steps:**
-```bash
-export VAPI_PUBLIC_KEY=...      # Vapi dashboard -> Settings -> API Keys -> Public Key
-export VAPI_ASSISTANT_ID=...    # from the deploy in §2
-cd dashboard && streamlit run app.py
-```
-Open the app → **🎙️ Web Call** tab → pick a customer → **Start AI Voice Call** →
-allow the microphone prompt → talk.
+1. On the FastAPI/Render service, set `VAPI_PUBLIC_KEY` and `VAPI_ASSISTANT_ID` in its environment.
+2. Keep `BACKEND_URL` pointed at that public HTTPS backend in the local Streamlit dashboard.
+3. Run the dashboard: `cd dashboard && streamlit run app.py`.
+4. Open **🎙️ Web Call** → pick a customer → **Open Real AI Voice Call**.
+5. The browser opens `/webcall` directly from the FastAPI service; allow microphone access and talk.
+
+The Web Call is intentionally **not** rendered with `st.components.v1.html()` because Streamlit
+sandboxes that component and can give the iframe a `null` origin. Daily's browser call
+object uses `postMessage` and rejects that origin. The `/webcall` page is a normal HTTPS
+document, so its origin is the Render backend origin.
 
 **Known blockers / unverified in this environment** (no outbound network access here
 at all — not to Vapi, not to esm.sh, not even to `pip install fastapi` — so none of
@@ -269,8 +272,9 @@ real test call: open the call in the Vapi dashboard's Call Logs, or call Vapi's
 | Voice sounds wrong / default voice used | `VAPI_VOICE_ID` not set before rendering, or an invalid ID | Confirm the voice ID exists in your ElevenLabs account and was set before running `render_vapi_config.py` |
 | Tool calls worked earlier in the session but suddenly all fail | ngrok free-tier URL rotated (e.g. `uvicorn`/`ngrok` was restarted) | Get the new `https://....ngrok-free.app` URL, re-run `render_vapi_config.py` with it, and re-deploy/re-paste the assistant config — the old URL is dead the moment the tunnel restarts |
 | Need to see exactly what Vapi is sending to a tool | — | With `ngrok` running, open `http://127.0.0.1:4040` locally — it logs every request/response, including the full JSON body, which is the fastest way to debug a mismatch (e.g. an unexpected phone number format) |
-| Web Call tab shows "Missing environment variable(s)" | `VAPI_PUBLIC_KEY` and/or `VAPI_ASSISTANT_ID` not exported before `streamlit run` | Export both (see §5b) and restart the dashboard process — Streamlit doesn't hot-reload env vars |
-| Web Call: clicking Start does nothing / mic prompt never appears | Browser blocked mic access to the component iframe, or `esm.sh` unreachable | Check browser devtools console; see the "Known blockers" list in §5b |
+| Web Call page shows missing Vapi configuration | `VAPI_PUBLIC_KEY` and/or `VAPI_ASSISTANT_ID` missing on the FastAPI/Render service | Add both variables to the backend service and restart/redeploy it; verify `/api/webcall-config` returns 200 |
+| Web Call: Daily reports `Invalid target origin 'null'` | Vapi/Daily is being run inside a sandboxed Streamlit component iframe | Use the backend-served `/webcall` page; do not reintroduce `st.components.v1.html()` for the Vapi SDK |
+| Web Call: clicking Start does nothing / mic prompt never appears | Browser blocked microphone access or `esm.sh` unreachable | Open the backend `/webcall` page directly over HTTPS, allow microphone access, and check browser devtools/network if the CDN is blocked |
 | Web Call: `verify_customer` never succeeds even with correct answers | `phone` static parameter resolved empty (see §5b's Liquid caveat) | Confirm the dashboard is passing `customer_phone` in `variableValues` (Network tab on Vapi's side, or check `/api/events` for the raw `verify_customer` event detail) |
 
 ## 10. What still requires an actual real call

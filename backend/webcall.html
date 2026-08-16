@@ -4,799 +4,236 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Maya — Kapture Finance Web Call</title>
-
   <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      margin: 0;
-      padding: 24px;
-      background: #f8fafc;
-      color: #0f172a;
-    }
-
-    .card {
-      max-width: 760px;
-      margin: 0 auto;
-      background: white;
-      border: 1px solid #e2e8f0;
-      border-radius: 12px;
-      padding: 24px;
-      box-shadow: 0 4px 18px rgba(15,23,42,.06);
-    }
-
-    h1 {
-      margin: 0 0 6px;
-      font-size: 24px;
-    }
-
-    .muted {
-      color: #64748b;
-    }
-
-    label {
-      display: block;
-      margin-top: 18px;
-      margin-bottom: 6px;
-      font-weight: 600;
-    }
-
-    select {
-      width: 100%;
-      padding: 10px;
-      border: 1px solid #cbd5e1;
-      border-radius: 7px;
-      background: white;
-      font-size: 15px;
-    }
-
-    .metrics {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
-      margin-top: 14px;
-    }
-
-    .metric {
-      border: 1px solid #e2e8f0;
-      border-radius: 8px;
-      padding: 10px;
-    }
-
-    .metric .value {
-      font-weight: 700;
-      margin-top: 4px;
-    }
-
-    button {
-      border: 0;
-      border-radius: 7px;
-      padding: 10px 16px;
-      font-size: 15px;
-      cursor: pointer;
-      margin-top: 18px;
-      margin-right: 7px;
-    }
-
-    #start {
-      background: #16a34a;
-      color: white;
-    }
-
-    #end {
-      background: #dc2626;
-      color: white;
-      display: none;
-    }
-
-    #mute {
-      background: #6b7280;
-      color: white;
-      display: none;
-    }
-
-    #status {
-      font-weight: 700;
-      margin-top: 18px;
-    }
-
-    #error {
-      color: #dc2626;
-      font-weight: 600;
-      white-space: pre-wrap;
-      margin-top: 10px;
-    }
-
-    #callid {
-      color: #64748b;
-      font-size: 12px;
-      margin-top: 8px;
-      word-break: break-all;
-    }
-
-    #log {
-      margin-top: 14px;
-      height: 300px;
-      overflow-y: auto;
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      border-radius: 8px;
-      padding: 10px;
-      font-size: 13px;
-      line-height: 1.5;
-    }
-
-    .note {
-      margin-top: 16px;
-      font-size: 13px;
-      color: #64748b;
-    }
-
-    @media (max-width: 640px) {
-      .metrics {
-        grid-template-columns: 1fr;
-      }
-
-      body {
-        padding: 12px;
-      }
-    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 24px; background: #f8fafc; color: #0f172a; }
+    .card { max-width: 760px; margin: 0 auto; background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; box-shadow: 0 4px 18px rgba(15,23,42,.06); }
+    h1 { margin: 0 0 6px; font-size: 24px; }
+    .muted { color: #64748b; }
+    label { display: block; margin-top: 18px; margin-bottom: 6px; font-weight: 600; }
+    select { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 7px; background: white; font-size: 15px; }
+    .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+    .metric { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; }
+    .metric .value { font-weight: 700; margin-top: 4px; }
+    button { border: 0; border-radius: 7px; padding: 10px 16px; font-size: 15px; cursor: pointer; margin-top: 18px; margin-right: 7px; }
+    #start { background: #16a34a; color: white; }
+    #end { background: #dc2626; color: white; display: none; }
+    #mute { background: #6b7280; color: white; display: none; }
+    #status { font-weight: 700; margin-top: 18px; }
+    #error { color: #dc2626; font-weight: 600; white-space: pre-wrap; margin-top: 10px; }
+    #callid { color: #64748b; font-size: 12px; margin-top: 8px; word-break: break-all; }
+    #log { margin-top: 14px; height: 220px; overflow-y: auto; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; font-size: 13px; line-height: 1.5; }
+    .note { margin-top: 16px; font-size: 13px; color: #64748b; }
+    @media (max-width: 640px) { .metrics { grid-template-columns: 1fr; } body { padding: 12px; } }
   </style>
 </head>
-
 <body>
+  <main class="card">
+    <h1>🎙️ Maya — Real AI Voice Call</h1>
+    <div class="muted">This page is served directly by the FastAPI backend so Vapi/Daily run in a normal HTTPS browser document, not a sandboxed Streamlit iframe.</div>
 
-<main class="card">
+    <label for="customer">Customer for this call</label>
+    <select id="customer" disabled><option>Loading customers…</option></select>
 
-  <h1>🎙️ Maya — Real AI Voice Call</h1>
-
-  <div class="muted">
-    This page is served directly by the FastAPI backend so Vapi runs in a normal HTTPS browser document.
-  </div>
-
-  <label for="customer">Customer for this call</label>
-
-  <select id="customer" disabled>
-    <option>Loading customers…</option>
-  </select>
-
-  <div class="metrics">
-
-    <div class="metric">
-      <div class="muted">Customer</div>
-      <div class="value" id="name">—</div>
+    <div class="metrics">
+      <div class="metric"><div class="muted">Customer</div><div class="value" id="name">—</div></div>
+      <div class="metric"><div class="muted">Outstanding</div><div class="value" id="amount">—</div></div>
+      <div class="metric"><div class="muted">Days past due</div><div class="value" id="days">—</div></div>
     </div>
 
-    <div class="metric">
-      <div class="muted">Outstanding</div>
-      <div class="value" id="amount">—</div>
+    <button id="start">🎙️ Start AI Voice Call</button>
+    <button id="end">🔴 End Call</button>
+    <button id="mute">🔇 Mute</button>
+
+    <div id="status">Status: Loading…</div>
+    <div id="callid"></div>
+    <div id="error"></div>
+    <div id="log"></div>
+
+    <div class="note">
+      Microphone access requires HTTPS or localhost. Tool calls are made by Vapi to this backend's configured /tools/* endpoints.
     </div>
+  </main>
 
-    <div class="metric">
-      <div class="muted">Days past due</div>
-      <div class="value" id="days">—</div>
-    </div>
+  <script type="module">
+    const statusEl = document.getElementById('status');
+    const startBtn = document.getElementById('start');
+    const endBtn = document.getElementById('end');
+    const muteBtn = document.getElementById('mute');
+    const customerEl = document.getElementById('customer');
+    const nameEl = document.getElementById('name');
+    const amountEl = document.getElementById('amount');
+    const daysEl = document.getElementById('days');
+    const callIdEl = document.getElementById('callid');
+    const errorEl = document.getElementById('error');
+    const logEl = document.getElementById('log');
 
-  </div>
+    let vapi = null;
+    let assistantId = '';
+    let customers = [];
 
-  <button id="start">🎙️ Start AI Voice Call</button>
-  <button id="end">🔴 End Call</button>
-  <button id="mute">🔇 Mute</button>
-
-  <div id="status">Status: Loading…</div>
-
-  <div id="callid"></div>
-
-  <div id="error"></div>
-
-  <div id="log"></div>
-
-  <div class="note">
-    Microphone access requires HTTPS or localhost.
-  </div>
-
-</main>
-
-<script type="module">
-
-  const statusEl = document.getElementById("status");
-  const startBtn = document.getElementById("start");
-  const endBtn = document.getElementById("end");
-  const muteBtn = document.getElementById("mute");
-
-  const customerEl = document.getElementById("customer");
-
-  const nameEl = document.getElementById("name");
-  const amountEl = document.getElementById("amount");
-  const daysEl = document.getElementById("days");
-
-  const callIdEl = document.getElementById("callid");
-  const errorEl = document.getElementById("error");
-  const logEl = document.getElementById("log");
-
-  let vapi = null;
-  let assistantId = "";
-  let customers = [];
-
-  function setStatus(text) {
-    statusEl.textContent = "Status: " + text;
-  }
-
-  function showError(msg) {
-    errorEl.textContent = String(msg);
-  }
-
-  function clearError() {
-    errorEl.textContent = "";
-  }
-
-  function log(message, data = null) {
-
-    const row = document.createElement("div");
-
-    if (data !== null) {
-      row.textContent =
-        message + " " + JSON.stringify(data, null, 2);
-    } else {
-      row.textContent = message;
+    function setStatus(text) { statusEl.textContent = 'Status: ' + text; }
+    function showError(msg) { errorEl.textContent = String(msg); }
+    function clearError() { errorEl.textContent = ''; }
+    function log(line) {
+      const row = document.createElement('div');
+      row.textContent = line;
+      logEl.appendChild(row);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    function money(cents) {
+      if (cents == null) return '—';
+      return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(cents / 100);
+    }
+    function selectedCustomer() {
+      return customers.find(c => c.customer_id === customerEl.value) || null;
+    }
+    function renderCustomer() {
+      const c = selectedCustomer();
+      if (!c) return;
+      nameEl.textContent = c.full_name || '—';
+      amountEl.textContent = money(c.overdue_amount_cents);
+      daysEl.textContent = c.days_past_due ?? '—';
     }
 
-    logEl.appendChild(row);
-    logEl.scrollTop = logEl.scrollHeight;
+    async function loadConfigAndCustomers() {
+      const [configRes, customersRes] = await Promise.all([
+        fetch('/api/webcall-config'),
+        fetch('/api/customers')
+      ]);
+      if (!configRes.ok) throw new Error(await configRes.text());
+      if (!customersRes.ok) throw new Error(await customersRes.text());
 
-    console.log(message, data ?? "");
-  }
+      const config = await configRes.json();
+      customers = await customersRes.json();
+      assistantId = config.assistant_id;
 
-  function money(cents) {
+      if (!customers.length) throw new Error('No customers are configured in the backend.');
 
-    if (cents == null) {
-      return "—";
-    }
-
-    return new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: "INR"
-    }).format(cents / 100);
-  }
-
-  function selectedCustomer() {
-
-    return customers.find(
-      c => c.customer_id === customerEl.value
-    ) || null;
-  }
-
-  function renderCustomer() {
-
-    const customer = selectedCustomer();
-
-    if (!customer) {
-      return;
-    }
-
-    nameEl.textContent =
-      customer.full_name || "—";
-
-    amountEl.textContent =
-      money(customer.overdue_amount_cents);
-
-    daysEl.textContent =
-      customer.days_past_due ?? "—";
-  }
-
-
-  async function loadConfigAndCustomers() {
-
-    try {
-
-      const [configRes, customersRes] =
-        await Promise.all([
-          fetch("/api/webcall-config"),
-          fetch("/api/customers")
-        ]);
-
-      if (!configRes.ok) {
-        throw new Error(
-          "Config error: " + await configRes.text()
-        );
-      }
-
-      if (!customersRes.ok) {
-        throw new Error(
-          "Customers error: " + await customersRes.text()
-        );
-      }
-
-      const config =
-        await configRes.json();
-
-      customers =
-        await customersRes.json();
-
-      assistantId =
-        config.assistant_id;
-
-      if (!assistantId) {
-        throw new Error(
-          "VAPI_ASSISTANT_ID is empty."
-        );
-      }
-
-      log(
-        "Assistant ID loaded: " +
-        assistantId
-      );
-
-      if (!customers.length) {
-        throw new Error(
-          "No customers configured."
-        );
-      }
-
-      customerEl.innerHTML = "";
-
-      for (const customer of customers) {
-
-        const option =
-          document.createElement("option");
-
-        option.value =
-          customer.customer_id;
-
-        option.textContent =
-          `${customer.full_name} (${customer.phone})`;
-
+      customerEl.innerHTML = '';
+      for (const c of customers) {
+        const option = document.createElement('option');
+        option.value = c.customer_id;
+        option.textContent = `${c.full_name} (${c.phone})`;
         customerEl.appendChild(option);
       }
 
-      const requested =
-        new URLSearchParams(
-          window.location.search
-        ).get("customer_id");
-
-      if (
-        requested &&
-        customers.some(
-          c => c.customer_id === requested
-        )
-      ) {
-
+      const requested = new URLSearchParams(window.location.search).get('customer_id');
+      if (requested && customers.some(c => c.customer_id === requested)) {
         customerEl.value = requested;
-
       } else {
-
-        const rahul =
-          customers.find(
-            c =>
-              (c.full_name || "")
-                .includes("Rahul Sharma")
-          );
-
-        if (rahul) {
-          customerEl.value =
-            rahul.customer_id;
-        }
+        const rahul = customers.find(c => (c.full_name || '').includes('Rahul Sharma'));
+        if (rahul) customerEl.value = rahul.customer_id;
       }
-
       customerEl.disabled = false;
-
       renderCustomer();
 
-
-      /*
-       * Load Vapi Web SDK
-       */
-
-      const { default: Vapi } =
-        await import(
-          "https://esm.sh/@vapi-ai/web@latest"
-        );
-
-      vapi =
-        new Vapi(config.public_key);
-
+      // Import the Vapi Web SDK in this top-level HTTPS document.
+      const { default: Vapi } = await import('https://esm.sh/@vapi-ai/web@latest');
+      vapi = new Vapi(config.public_key);
       attachVapiHandlers();
-
-      setStatus("Ready");
-
-      log(
-        "Vapi Web SDK loaded."
-      );
-
-      log(
-        "Browser origin: " +
-        window.location.origin
-      );
-
-    } catch (error) {
-
-      setStatus(
-        "🔴 Failed to initialize"
-      );
-
-      showError(
-        error.message || String(error)
-      );
-
-      log(
-        "Initialization error:",
-        error.message || String(error)
-      );
+      setStatus('Ready');
+      log('Vapi Web SDK loaded. Browser origin: ' + window.location.origin);
     }
-  }
 
+    function attachVapiHandlers() {
+      vapi.on('call-start', () => {
+        clearError();
+        setStatus('🟢 AI Call Connected');
+        startBtn.style.display = 'none';
+        endBtn.style.display = 'inline-block';
+        muteBtn.style.display = 'inline-block';
+        log('Call connected.');
+        try {
+          const id = (vapi.call && vapi.call.id) || null;
+          if (id) callIdEl.textContent = 'Call ID: ' + id;
+        } catch (_) {}
+      });
 
-  function attachVapiHandlers() {
+      vapi.on('call-end', () => {
+        setStatus('⚪ Call Ended');
+        startBtn.style.display = 'inline-block';
+        endBtn.style.display = 'none';
+        muteBtn.style.display = 'none';
+        log('Call ended.');
+      });
 
-    /*
-     * CALL START
-     */
+      vapi.on('error', (e) => {
+        setStatus('🔴 Error');
+        startBtn.style.display = 'inline-block';
+        endBtn.style.display = 'none';
+        muteBtn.style.display = 'none';
+        const msg = (e && (e.message || e.errorMsg || JSON.stringify(e))) || 'Unknown error';
+        showError(msg);
+        log('Error: ' + msg);
+      });
 
-    vapi.on("call-start", () => {
-
-      clearError();
-
-      setStatus(
-        "🟢 AI Call Connected"
-      );
-
-      startBtn.style.display =
-        "none";
-
-      endBtn.style.display =
-        "inline-block";
-
-      muteBtn.style.display =
-        "inline-block";
-
-      log("Call connected.");
-
-      try {
-
-        const id =
-          vapi.call?.id || null;
-
-        if (id) {
-
-          callIdEl.textContent =
-            "Call ID: " + id;
-
-          log(
-            "Vapi Call ID: " + id
-          );
+      vapi.on('message', (msg) => {
+        if (!msg || !msg.type) return;
+        if (msg.type === 'transcript' && msg.transcriptType === 'final') {
+          log((msg.role || 'unknown') + ': ' + msg.transcript);
+        } else if (msg.type === 'tool-calls') {
+          const names = (msg.toolCalls || msg.toolCallList || [])
+            .map(tc => (tc.function && tc.function.name) || tc.name)
+            .filter(Boolean).join(', ');
+          log('🔧 tool call: ' + (names || '(unknown tool)'));
+        } else if (msg.type === 'status-update') {
+          log('status: ' + msg.status);
         }
+      });
+    }
 
-      } catch (error) {
+    customerEl.addEventListener('change', renderCustomer);
 
-        log(
-          "Could not read Vapi call ID:",
-          error.message
-        );
-      }
-
-    });
-
-
-    /*
-     * CALL END
-     */
-
-    vapi.on("call-end", () => {
-
-      setStatus(
-        "⚪ Call Ended"
-      );
-
-      startBtn.style.display =
-        "inline-block";
-
-      endBtn.style.display =
-        "none";
-
-      muteBtn.style.display =
-        "none";
-
-      log("Call ended.");
-
-    });
-
-
-    /*
-     * ERRORS
-     */
-
-    vapi.on("error", error => {
-
-      setStatus(
-        "🔴 Vapi Error"
-      );
-
-      const message =
-        error?.message ||
-        error?.errorMsg ||
-        JSON.stringify(error);
-
-      showError(message);
-
-      log(
-        "Vapi error:",
-        error
-      );
-
-    });
-
-
-    /*
-     * ALL VAPI MESSAGES
-     */
-
-    vapi.on("message", message => {
-
-      if (!message) {
+    startBtn.addEventListener('click', async () => {
+      if (!vapi) return;
+      const c = selectedCustomer();
+      if (!c) {
+        showError('Select a customer first.');
         return;
       }
-
-      /*
-       * Log EVERYTHING while debugging.
-       */
-
-      log(
-        "Vapi message: " +
-        (message.type || "unknown"),
-        message
-      );
-
-
-      /*
-       * TRANSCRIPT
-       */
-
-      if (
-        message.type === "transcript" &&
-        message.transcriptType === "final"
-      ) {
-
-        log(
-          `${message.role || "unknown"}: ${message.transcript}`
-        );
-      }
-
-
-      /*
-       * TOOL CALL
-       */
-
-      if (
-        message.type === "tool-calls"
-      ) {
-
-        const calls =
-          message.toolCalls ||
-          message.toolCallList ||
-          [];
-
-        for (const call of calls) {
-
-          const functionName =
-            call?.function?.name ||
-            call?.name ||
-            "unknown";
-
-          log(
-            "🔧 TOOL CALL: " +
-            functionName,
-            call
-          );
-        }
-      }
-
-
-      /*
-       * TOOL RESULT
-       */
-
-      if (
-        message.type === "tool-results"
-      ) {
-
-        log(
-          "🔧 TOOL RESULT",
-          message
-        );
-      }
-
-
-      /*
-       * STATUS
-       */
-
-      if (
-        message.type === "status-update"
-      ) {
-
-        log(
-          "STATUS: " +
-          message.status
-        );
-      }
-
-    });
-
-  }
-
-
-  /*
-   * CUSTOMER CHANGE
-   */
-
-  customerEl.addEventListener(
-    "change",
-    renderCustomer
-  );
-
-
-  /*
-   * START CALL
-   */
-
-  startBtn.addEventListener(
-    "click",
-    async () => {
-
-      if (!vapi) {
-
-        showError(
-          "Vapi is not initialized."
-        );
-
-        return;
-      }
-
-      const customer =
-        selectedCustomer();
-
-      if (!customer) {
-
-        showError(
-          "Select a customer first."
-        );
-
-        return;
-      }
-
       clearError();
-
-      setStatus(
-        "🟡 Connecting…"
-      );
-
-      logEl.innerHTML = "";
-
-      callIdEl.textContent = "";
-
-
-      /*
-       * These variables are available
-       * to the Vapi assistant.
-       */
-
-      const variableValues = {
-
-        customer_phone:
-          customer.phone,
-
-        customer_name:
-          customer.full_name,
-
-        outstanding_amount:
-          money(
-            customer.overdue_amount_cents
-          )
-      };
-
-
-      log(
-        "Starting Vapi call with variables:",
-        variableValues
-      );
-
-
+      setStatus('🟡 Connecting…');
+      logEl.innerHTML = '';
+      callIdEl.textContent = '';
       try {
-
-        await vapi.start(
-          assistantId,
-          {
-            variableValues
-          }
-        );
-
-      } catch (error) {
-
-        setStatus(
-          "🔴 Failed to start call"
-        );
-
-        const message =
-          error?.message ||
-          String(error);
-
-        showError(
-          "Could not start call: " +
-          message
-        );
-
-        log(
-          "Start call error:",
-          error
-        );
+        await vapi.start(assistantId, {
+          variableValues: {
+            customer_phone: c.phone,
+            customer_name: c.full_name,
+            outstanding_amount: money(c.overdue_amount_cents),
+          },
+        });
+      } catch (e) {
+        setStatus('🔴 Failed to start call');
+        const msg = e && e.message ? e.message : String(e);
+        if (/permission|NotAllowedError|denied/i.test(msg)) {
+          showError('Microphone permission was denied. Allow microphone access for this HTTPS site and try again.');
+        } else if (/assistant/i.test(msg)) {
+          showError('Vapi rejected the assistant ID. Confirm VAPI_ASSISTANT_ID is the deployed assistant. ' + msg);
+        } else {
+          showError('Could not start the call: ' + msg);
+        }
+        log('Error: ' + msg);
       }
+    });
 
-    }
-  );
+    endBtn.addEventListener('click', () => {
+      try { vapi.stop(); } catch (e) { showError(String(e)); }
+    });
 
-
-  /*
-   * END CALL
-   */
-
-  endBtn.addEventListener(
-    "click",
-    () => {
-
+    muteBtn.addEventListener('click', () => {
       try {
+        const nowMuted = !vapi.isMuted();
+        vapi.setMuted(nowMuted);
+        muteBtn.textContent = nowMuted ? '🔊 Unmute' : '🔇 Mute';
+      } catch (e) { showError(String(e)); }
+    });
 
-        vapi.stop();
-
-      } catch (error) {
-
-        showError(
-          String(error)
-        );
-
-      }
-
-    }
-  );
-
-
-  /*
-   * MUTE
-   */
-
-  muteBtn.addEventListener(
-    "click",
-    () => {
-
-      try {
-
-        const muted =
-          !vapi.isMuted();
-
-        vapi.setMuted(muted);
-
-        muteBtn.textContent =
-          muted
-            ? "🔊 Unmute"
-            : "🔇 Mute";
-
-      } catch (error) {
-
-        showError(
-          String(error)
-        );
-
-      }
-
-    }
-  );
-
-
-  /*
-   * INITIALIZE
-   */
-
-  loadConfigAndCustomers();
-
-</script>
-
+    loadConfigAndCustomers().catch(err => {
+      setStatus('🔴 Failed to initialize');
+      showError('Could not initialize Web Call: ' + err.message);
+      log('Initialization error: ' + err.message);
+    });
+  </script>
 </body>
 </html>

@@ -267,7 +267,6 @@ def startup():
 class VerifyCustomerRequest(BaseModel):
     call_id: str = Field(..., description="Vapi call id, stable per phone call")
     phone: str = Field(..., description="Caller phone number, e.g. from Vapi's call.customer.number")
-    full_name: str
     dob: str = Field(..., description="YYYY-MM-DD as stated by caller")
     last4: str = Field(..., description="Last 4 digits of the loan account as stated by caller")
 

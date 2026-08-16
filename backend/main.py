@@ -266,7 +266,7 @@ def startup():
 
 class VerifyCustomerRequest(BaseModel):
     call_id: str = Field(..., description="Vapi call id, stable per phone call")
-    phone: str = Field(..., description="Caller phone number, e.g. from Vapi's call.customer.number")
+    phone: Optional[str] = Field(None, description="Caller phone number (received but no longer used for matching)")
     last4: str = Field(..., description="Last 4 digits of the loan account as stated by caller")
 
 
@@ -346,14 +346,11 @@ def verify_customer(req: VerifyCustomerRequest):
         return {"result": "blocked", "reason": "call already escalated to a human agent"}
 
     cust = conn.execute(
-        "SELECT * FROM customers WHERE phone=?", (req.phone,)
+        "SELECT * FROM customers WHERE last4=?", (req.last4,)
     ).fetchone()
 
     attempts = call["verification_attempts"] + 1
-    matched = (
-        cust is not None
-        and cust["last4"] == req.last4
-    )
+    matched = cust is not None
 
     if matched:
         if cust["cease_contact"]:

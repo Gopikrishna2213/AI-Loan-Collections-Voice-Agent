@@ -354,7 +354,6 @@ def verify_customer(req: VerifyCustomerRequest):
     attempts = call["verification_attempts"] + 1
     matched = (
         cust is not None
-        and cust["full_name"].strip().lower() == req.full_name.strip().lower()
         and cust["dob"] == req.dob
         and cust["last4"] == req.last4
     )

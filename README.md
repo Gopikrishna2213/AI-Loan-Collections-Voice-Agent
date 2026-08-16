@@ -75,7 +75,7 @@ pip install -r requirements.txt
 cd backend && uvicorn main:app --reload --port 8000
 
 # terminal 2 — dashboard
-cd dashboard && BACKEND_URL=https://ai-collections-agent.onrender.com streamlit run app.py
+cd dashboard && BACKEND_URL=http://localhost:8000 streamlit run app.py
 ```
 
 Open the Streamlit URL it prints. Use the **Call Simulator** tab to run a full call —

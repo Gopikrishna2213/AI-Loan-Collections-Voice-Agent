@@ -41,6 +41,7 @@ import os
 from typing import Optional, Literal
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "collections.db")
@@ -634,6 +635,38 @@ def api_events(call_id: Optional[str] = None):
         rows = conn.execute("SELECT * FROM events ORDER BY created_at DESC LIMIT 200").fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Browser Web Call page
+# ---------------------------------------------------------------------------
+# The Vapi Web SDK must run in a normal browser document with a real origin.
+# Streamlit's components.html() runs inside a sandboxed iframe whose origin
+# can be `null`, which breaks Daily's postMessage handshake.  Serve the Web
+# Call page directly from this FastAPI service instead.  The page then runs
+# at the Render HTTPS origin and reads only client-safe Vapi values.
+
+WEB_CALL_HTML = os.path.join(os.path.dirname(__file__), "webcall.html")
+
+
+@app.get("/webcall", include_in_schema=False)
+def webcall_page():
+    return FileResponse(WEB_CALL_HTML, media_type="text/html")
+
+
+@app.get("/api/webcall-config", include_in_schema=False)
+def webcall_config():
+    public_key = os.environ.get("VAPI_PUBLIC_KEY", "").strip()
+    assistant_id = os.environ.get("VAPI_ASSISTANT_ID", "").strip()
+    if not public_key or not assistant_id:
+        raise HTTPException(
+            status_code=503,
+            detail="VAPI_PUBLIC_KEY and VAPI_ASSISTANT_ID must be configured on the backend service.",
+        )
+    return {
+        "public_key": public_key,
+        "assistant_id": assistant_id,
+    }
 
 
 @app.get("/health")

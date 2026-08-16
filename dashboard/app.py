@@ -48,6 +48,9 @@ BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
 VAPI_PUBLIC_KEY = os.environ.get("VAPI_PUBLIC_KEY", "")
 VAPI_ASSISTANT_ID = os.environ.get("VAPI_ASSISTANT_ID", "")
 
+st.write("VAPI_PUBLIC_KEY loaded:", bool(os.environ.get("VAPI_PUBLIC_KEY")))
+st.write("VAPI_ASSISTANT_ID loaded:", bool(os.environ.get("VAPI_ASSISTANT_ID")))
+
 st.set_page_config(page_title="Maya — Kapture Finance Collections", page_icon="📞", layout="wide")
 
 

@@ -163,8 +163,9 @@ curl -s $BACKEND_URL/health
    this repo doesn't wrap one).
 3. Call the number, or trigger an outbound call to your own phone.
 4. Answer, and go through the PTP scenario in §5 of `README.md` / Task 5 of the
-   assignment: confirm you're Rahul Sharma, verify with DOB `1990-06-15` and last 4
-   `4321`, hear the EMI disclosed, then say "I can pay tomorrow" / "₹8,499".
+   assignment: confirm you're Rahul Sharma, verify with last 4 `4321` (that's the
+   only field asked for now — phone/DOB/name are no longer checked), hear the EMI
+   disclosed, then say "I can pay tomorrow" / "₹8,499".
 
 ## 5b. Web Call — testing from the browser instead of a phone
 
@@ -223,9 +224,9 @@ the following could be exercised from this sandbox; verify them in yours):
 Matches Task 5 of the assignment exactly (see `README.md` → Demo Scenarios for the
 full transcript). What should happen technically, in order:
 
-1. `POST /tools/verify_customer` → `{"result": "verified", "loan_type": "Personal Loan", "overdue_amount_cents": 849900, "days_past_due": 12, ...}`
-2. Maya states the EMI amount and days past due out loud.
-3. `POST /tools/log_promise_to_pay` with `amount_cents: 849900` → `{"result": "logged", "ptp_id": "..."}`
+1. `POST /tools/verify_customer` → `{"result": "verified", "full_name": "Rahul Sharma", "loan_type": "Personal Loan", "overdue_amount_rupees": 8499, "days_past_due": 12, ...}`
+2. Maya states the EMI amount and days past due out loud, addressing the customer by the `full_name` returned above.
+3. `POST /tools/log_promise_to_pay` with `amount_rupees: 8499` → `{"result": "logged", "ptp_id": "..."}`
 4. (Optional) `POST /tools/send_payment_link` → `{"result": "sent", "url": "https://pay.kapturefinance-mock.com/l/..."}`
 5. `POST /tools/mark_disposition` with `disposition: "PROMISE_TO_PAY"` (or
    `"PAYMENT_LINK_SENT"` if step 4 ran) → `{"result": "recorded", ...}`
@@ -284,8 +285,8 @@ and the system prompt — it has not been confirmed against a live Vapi call fro
 environment (no outbound network access here to reach Vapi/Deepgram/ElevenLabs, and
 no live credentials configured). Specifically unverified:
 
-- Real STT accuracy on spoken DOB / last-4 digits (numbers are one of the harder STT
-  cases — e.g. "one nine nine zero" vs. "nineteen ninety").
+- Real STT accuracy on spoken last-4 digits (numbers are one of the harder STT
+  cases to transcribe reliably over phone-quality audio).
 - Real end-to-end turn latency against the §12 budget in `docs/HLD.md`.
 - Whether Vapi's actual caller-ID phone format matches `customers.phone` in the mock
   DB (`+919876543210`) without normalization.

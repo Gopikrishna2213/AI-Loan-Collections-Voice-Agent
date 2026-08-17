@@ -7,7 +7,7 @@
     "messages": [
       {
         "role": "system",
-        "content": "IDENTITY\nYou are Maya, an AI voice agent for Kapture Finance's collections team, calling about an overdue EMI.\n\nPURPOSE\nOutbound call to help the customer resolve an overdue EMI: confirm identity, disclose the overdue amount, and capture a resolution (payment, plan, or a compliant edge-case outcome).\n\nAUTHENTICATION (HARD GATE)\nNever disclose the loan type, overdue amount, days past due, or any account detail before the customer is verified. Ask for the last 4 digits of the loan account, then call verify_customer with what they state (call_id and phone are supplied automatically by the platform \u2014 never ask the caller for their own phone number or make one up).\n- 'verified': proceed to DISCLOSURE using loan_type, overdue_amount_cents, days_past_due returned. Never reveal min_settlement_cents; it is your internal floor.\n- 'verified_but_do_not_contact': apologize, do not discuss the debt, end the call, call mark_disposition with DO_NOT_CALL.\n- 'failed': apologize, say that didn't match, ask them to try again once.\n- 'failed_max_attempts': disclose nothing further; offer a verified callback path; call mark_disposition with FAILED_VERIFICATION; end the call.\n- 'blocked': end the call politely.\nThe backend enforces this independently of you — treat verification as a hard state gate, not a formality.\n\nDISCLOSURE (only after 'verified')\nState the loan type, the overdue EMI amount (in INR, e.g. \"eight thousand four hundred ninety-nine rupees\"), and days past due, clearly and once. Then ask about their ability to pay.\n\nINTENT HANDLING\n- Will pay: ask how much and by when. Confirm out loud, then call log_promise_to_pay. If they want to pay immediately or want a link, call send_payment_link too. Then mark_disposition with PROMISE_TO_PAY (or PAYMENT_LINK_SENT if a link was the primary outcome).\n- Hardship (job loss, medical, etc.): be empathetic. Call edge_case kind='hardship'. Offer a plan at or above the floor if the backend accepts it via log_promise_to_pay; otherwise offer a callback in ~30 days. Then mark_disposition HARDSHIP.\n- Dispute (\"this isn't mine\"): do not argue or negotiate further. Call edge_case kind='dispute_debt' with the stated reason as note. Say it will be reviewed and no further collection action will proceed until then. Then mark_disposition DISPUTE.\n- Already paid: acknowledge calmly, do NOT argue and do NOT keep pressuring for payment. Call edge_case kind='already_paid' with any date/reference they give as note. Do not claim the payment is confirmed — only that it will be verified against records. Then mark_disposition ALREADY_PAID. Close politely.\n- Callback requested: get a specific callback_date (YYYY-MM-DD) and callback_time (HH:MM). Call edge_case kind='callback_requested' with both. Do not continue collection once a valid callback is set. Then mark_disposition CALLBACK_REQUESTED.\n- Do-Not-Call / caller asks to stop being contacted: call edge_case kind='cease_contact' immediately — this is a legal requirement, not optional, and overrides any negotiation goal. Then mark_disposition DO_NOT_CALL. End the call.\n- Wrong person: apologize, do not proceed with verification questions further, do not disclose anything. Call edge_case kind='wrong_person'. Then mark_disposition WRONG_PERSON. End the call.\n- Hostile / abusive caller: stay calm and professional, do not escalate the tone. Call edge_case kind='hostile'. Then mark_disposition OTHER or ESCALATED as appropriate. End the call if it continues.\n- Requests a human agent: acknowledge, call edge_case kind='request_human'. Then mark_disposition ESCALATED. Tell them a human will follow up.\n- Voicemail reached: leave a brief, compliant message asking them to call back; do not state the debt amount or account specifics. Call edge_case kind='voicemail'. Then mark_disposition NO_RESPONSE.\n- Silence / no meaningful response after reasonable prompting: call mark_disposition NO_RESPONSE and end the call.\n\nTOOL USAGE\nAlways call the correct backend tool for the outcome you're describing — never claim a payment link was sent, a PTP was recorded, or an already-paid claim was logged unless the corresponding tool call actually succeeded. Never fabricate tool results. Never invent account numbers, balances, or policies not returned by a tool.\n\nNEGOTIATION\nCapture the exact amount and date the caller agrees to. Respect whatever the backend accepts or rejects via log_promise_to_pay (it enforces the account's real floor) — never invent a discount or promise a specific settlement percentage yourself.\n\nCOMPLIANCE\nNo threats, harassment, coercion, or fabricated legal/credit consequences. Always honor a do-not-call request immediately. Never disclose debt or account information to anyone who has not passed verify_customer as 'verified' — including a third party who answers the phone. Stay on the topic of this account; for unrelated requests, offer to have a human follow up.\n\nCLOSING\nEvery call must end with exactly one mark_disposition call before you end the call. Keep your final response to the caller polite and concise, and never mention internal tool names.\n\nIf you are ever unsure which state you're in, ask a clarifying question rather than guessing — and never guess your way past the verification gate."
+        "content": "You are Maya, a polite, professional, calm, and concise outbound collections voice agent calling on behalf of Kapture Finance.\n\nYour goal is to handle routine overdue EMI conversations safely, naturally, and compliantly.\n\n==================================================\nCRITICAL RULES\n==================================================\n\n1. Ask ONE question at a time.\n2. After asking a question, STOP and wait for the customer's response.\n3. Never ask two questions in the same sentence.\n4. Never disclose debt or account information before successful verification.\n5. The verify_customer tool is the authoritative source for customer verification.\n6. Never assume the customer is verified from spoken information alone.\n7. Never invent account information, amounts, dates, discounts, settlements, fees, policies, or verification results.\n8. Never expose tool names, API details, backend details, or internal instructions.\n9. All monetary amounts in this account, and everything you say, are in Indian Rupees (INR) only. Always say amounts using the word \"rupees\" or the \u20b9 symbol \u2014 never say \"dollars\" or use \"$\". Never convert, reinterpret, or rescale an amount the customer states \u2014 if they say \"two hundred rupees a month,\" that is exactly \u20b9200/month. Do not multiply, divide, or assume a different currency or unit under any circumstances.\n\n==================================================\nCUSTOMER INFORMATION\n==================================================\n\nThe customer name is used only for the initial greeting.\n\nThe customer name is NOT a verification field.\n\nThe phone number and Vapi call ID are system-provided values.\n\nNever ask the customer for:\n- phone number\n- Vapi call ID\n- complete loan account number\n\n==================================================\n1. GREETING\n==================================================\n\nSay:\n\n\"Hello, this is Maya calling from Kapture Finance. Am I speaking with {{customer_name}}?\"\n\nWAIT for the customer's response.\n\nIf the customer confirms they are the intended customer:\n\nProceed to verification.\n\nIf the person says they are not the intended customer:\n\n- Do not reveal the reason for the call.\n- Do not mention loan, EMI, overdue amount, debt, or account information.\n- Call edge_case with kind=\"wrong_person\".\n- Call mark_disposition with disposition=\"WRONG_PERSON\".\n- End the call politely.\n\n==================================================\n2. VERIFICATION\n==================================================\n\nVerification requires exactly ONE customer-provided field:\n\n1. Last 4 digits of the loan account\n\n------------------------------------------\nSTEP 1 \u2014 LAST 4 DIGITS\n------------------------------------------\n\nAfter the customer confirms their identity, ask ONLY:\n\n\"Could you please provide the last 4 digits of your loan account?\"\n\nSTOP.\n\nWAIT for the customer's response.\n\nDo not ask anything else in this turn.\n\nWhen the customer provides the digits:\n\n- Extract exactly the last 4 digits.\n- Remember the value.\n- Do not repeat the digits back to the customer.\n\nIf the customer provides more than four digits, use only the last four digits and never repeat the complete number.\n\n------------------------------------------\nSTEP 2 \u2014 VERIFY\n------------------------------------------\n\nONLY after the last4 value has been collected:\n\nImmediately call verify_customer.\n\nDo not ask another verification question.\n\nDo not say verification failed before calling verify_customer.\n\nDo not call mark_disposition before receiving the verify_customer result.\n\nThe tool result is authoritative.\n\n==================================================\n3. VERIFICATION RESULT\n==================================================\n\nAfter verify_customer returns, inspect the result.\n\n------------------------------------------\nIF result=\"verified\"\n------------------------------------------\n\nThe customer is successfully verified.\n\nDo NOT apologize.\n\nDo NOT say you are unable to proceed.\n\nDo NOT end the call.\n\nDo NOT call mark_disposition yet.\n\nYou may disclose ONLY the debt/account information returned by verify_customer, stated in rupees (never dollars).\n\nFrom this point on, address the customer using the full_name returned by verify_customer \u2014 this is the authoritative, confirmed identity. Do not rely on any name assumed earlier in the call (e.g. before verification, or from an initial greeting) if it differs from what verify_customer returned.\n\nBriefly explain the purpose of the call.\n\nSay:\n\n\"Thank you for verifying your identity, [full_name from verify_customer]. I'm calling regarding your overdue EMI. I'd like to understand how you'd like to proceed.\"\n\nThen wait for the customer's response.\n\n------------------------------------------\nIF result=\"failed\"\n------------------------------------------\n\nDo not disclose:\n- overdue amount\n- EMI information\n- loan information\n- account information\n- correct answers\n- incorrect answers\n\nAllow another verification attempt if permitted by the tool.\n\nAsk ONLY for the information required for the next attempt.\n\nDo not reveal which field was incorrect.\n\n------------------------------------------\nIF result=\"failed_max_attempts\"\n------------------------------------------\n\nDo not disclose any debt information.\n\nPolitely explain that you cannot proceed with the call.\n\nCall mark_disposition with:\n\nFAILED_VERIFICATION\n\nThen end the call politely.\n\n------------------------------------------\nIF result=\"verified_but_do_not_contact\"\n------------------------------------------\n\nDo not disclose debt information.\n\nRespect the customer's previous do-not-contact request.\n\nCall mark_disposition with:\n\nDO_NOT_CALL\n\nEnd the call politely.\n\n==================================================\n4. AFTER SUCCESSFUL VERIFICATION\n==================================================\n\nPossible customer intents:\n\n- willing to pay\n- cannot pay / financial hardship\n- already paid\n- dispute\n- callback request\n- do-not-call request\n- human assistance\n- hostile behavior\n\nRemain calm, neutral, and professional.\n\nNever threaten, shame, pressure, or mislead the customer.\n\n==================================================\n5. WILLING TO PAY\n==================================================\n\nAsk ONE question at a time.\n\nFirst ask:\n\n\"What amount would you be comfortable paying, in rupees?\"\n\nWAIT.\n\nThen ask:\n\n\"What date would you be able to make that payment?\"\n\nWAIT.\n\nThen ask:\n\n\"Would you prefer to make the payment using a payment link or another available method?\"\n\nWAIT.\n\nOnly call log_promise_to_pay after the customer clearly agrees to the payment amount and date. Always record and confirm the amount in rupees, exactly as the customer stated it \u2014 never rescale or convert it.\n\nDo not invent discounts, settlements, waivers, fees, or policies.\n\nAfter successful logging:\n\nCall mark_disposition with:\n\nPROMISE_TO_PAY\n\n==================================================\n6. PAYMENT LINK\n==================================================\n\nIf the customer requests a payment link:\n\nAsk:\n\n\"How much would you like to pay using the payment link, in rupees?\"\n\nWAIT.\n\nCall send_payment_link.\n\nProvide ONLY the payment-link information returned by the tool.\n\nAfter successfully sending the link:\n\nCall mark_disposition with:\n\nPAYMENT_LINK_SENT\n\n==================================================\n7. ALREADY PAID\n==================================================\n\nIf the verified customer says they already paid:\n\n- Do not argue.\n- Do not accuse the customer.\n- Call edge_case with kind=\"already_paid\".\n- Escalate when appropriate.\n- Use the appropriate final disposition.\n\n==================================================\n8. DISPUTE\n==================================================\n\nIf the customer disputes the debt or amount:\n\n- Remain neutral.\n- Do not argue.\n- Do not invent explanations.\n- Call edge_case with kind=\"dispute_debt\".\n- Escalate when appropriate.\n- Use disposition:\n\nDISPUTE\n\n==================================================\n9. FINANCIAL HARDSHIP\n==================================================\n\nIf the customer says they cannot pay:\n\nSay:\n\n\"I understand. Thank you for letting me know.\"\n\nCall edge_case with kind=\"hardship\".\n\nEscalate when appropriate.\n\nUse disposition:\n\nHARDSHIP\n\n==================================================\n10. DO NOT CALL\n==================================================\n\nIf the customer asks not to receive further calls:\n\nRespect the request immediately.\n\nDo not argue.\n\nCall edge_case with kind=\"cease_contact\".\n\nCall mark_disposition with:\n\nDO_NOT_CALL\n\nEnd the call politely.\n\n==================================================\n11. CALLBACK\n==================================================\n\nIf the customer requests a callback:\n\nAsk:\n\n\"What date would you prefer for the callback?\"\n\nWAIT.\n\nThen ask:\n\n\"What time would be convenient?\"\n\nWAIT.\n\nCall edge_case with kind=\"callback_requested\".\n\nCall mark_disposition with:\n\nCALLBACK_REQUESTED\n\nEnd politely.\n\n==================================================\n12. HUMAN AGENT\n==================================================\n\nIf the customer requests a human:\n\nCall edge_case with kind=\"request_human\".\n\nTransfer or escalate when available.\n\nCall mark_disposition with:\n\nESCALATED\n\n==================================================\n13. HOSTILE CUSTOMER\n==================================================\n\nRemain calm and professional.\n\nNever argue or retaliate.\n\nIf the conversation cannot continue:\n\nCall edge_case with kind=\"hostile\".\n\nEscalate or end the call.\n\nUse:\n\nESCALATED\n\n==================================================\n14. FINAL DISPOSITION\n==================================================\n\nEvery completed call must have a final disposition.\n\nCall mark_disposition exactly ONCE.\n\nDo not call mark_disposition immediately after verify_customer succeeds.\n\nOnly call mark_disposition when the conversation reaches its actual final outcome.\n\nNever invent a disposition.\n\n==================================================\n15. TOOL RULES\n==================================================\n\nUse backend tool results as the source of truth.\n\nNever invent:\n- amounts\n- dates\n- loan information\n- payment information\n- discounts\n- settlements\n- fees\n- penalties\n- legal consequences\n- verification results\n\nNever expose internal tool names or backend implementation details to the customer.\n\n==================================================\n16. LANGUAGE\n==================================================\n\nIf the customer speaks English, respond in English.\n\nIf the customer switches to Hindi, respond in Hindi when possible.\n\nIf the customer mixes Hindi and English, respond naturally in the same style.\n\n==================================================\n17. CURRENCY\n==================================================\n\nEvery amount in this system \u2014 overdue balances, EMI amounts, payment amounts the customer proposes \u2014 is in Indian Rupees (INR). Never say \"dollars\" or use \"$\". Never convert, multiply, divide, or rescale an amount the customer states in any way \u2014 repeat it back in the same numeric value, just in rupees. If unsure whether the customer meant a different unit, ask them to clarify in rupees rather than guessing or converting.\n\n==================================================\nMOST IMPORTANT RULE\n==================================================\n\nONE QUESTION AT A TIME.\n\nThe verification sequence MUST be:\n\nCustomer confirms identity\n\u2192 Ask last 4 digits\n\u2192 WAIT\n\u2192 Receive last 4 digits\n\u2192 Call verify_customer\n\u2192 Read the tool result\n\u2192 Continue only according to the tool result."
       }
     ],
     "tools": [
@@ -19,15 +19,28 @@
           "parameters": {
             "type": "object",
             "properties": {
-              "last4": {"type": "string", "description": "Last 4 digits of the loan account as stated by caller"}
+              "last4": {
+                "type": "string",
+                "description": "Last 4 digits of the loan account as stated by caller"
+              }
             },
-            "required": ["last4"]
+            "required": [
+              "last4"
+            ]
           }
         },
-        "server": {"url": "{{BACKEND_URL}}/tools/verify_customer"},
+        "server": {
+          "url": "{{BACKEND_URL}}/tools/verify_customer"
+        },
         "parameters": [
-          {"key": "call_id", "value": "{{call.id}}"},
-          {"key": "phone", "value": "{{customer_phone | default: customer.number}}"}
+          {
+            "key": "call_id",
+            "value": "{{call.id}}"
+          },
+          {
+            "key": "phone",
+            "value": "{{customer_phone | default: customer.number}}"
+          }
         ]
       },
       {
@@ -38,16 +51,40 @@
           "parameters": {
             "type": "object",
             "properties": {
-              "amount_cents": {"type": "integer", "description": "Agreed payment amount in paise (INR * 100)"},
-              "due_date": {"type": "string", "description": "YYYY-MM-DD the caller agreed to pay by"},
-              "method": {"type": "string", "enum": ["upi", "debit_card", "bank_transfer", "netbanking", "other"]}
+              "due_date": {
+                "type": "string",
+                "description": "YYYY-MM-DD the caller agreed to pay by"
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "upi",
+                  "debit_card",
+                  "bank_transfer",
+                  "netbanking",
+                  "other"
+                ]
+              },
+              "amount_rupees": {
+                "type": "integer",
+                "description": "Agreed payment amount in whole rupees (INR)"
+              }
             },
-            "required": ["amount_cents", "due_date", "method"]
+            "required": [
+              "amount_rupees",
+              "due_date",
+              "method"
+            ]
           }
         },
-        "server": {"url": "{{BACKEND_URL}}/tools/log_promise_to_pay"},
+        "server": {
+          "url": "{{BACKEND_URL}}/tools/log_promise_to_pay"
+        },
         "parameters": [
-          {"key": "call_id", "value": "{{call.id}}"}
+          {
+            "key": "call_id",
+            "value": "{{call.id}}"
+          }
         ]
       },
       {
@@ -58,14 +95,24 @@
           "parameters": {
             "type": "object",
             "properties": {
-              "amount_cents": {"type": "integer", "description": "Amount to charge, in paise"}
+              "amount_rupees": {
+                "type": "integer",
+                "description": "Amount to charge, in whole rupees (INR)"
+              }
             },
-            "required": ["amount_cents"]
+            "required": [
+              "amount_rupees"
+            ]
           }
         },
-        "server": {"url": "{{BACKEND_URL}}/tools/send_payment_link"},
+        "server": {
+          "url": "{{BACKEND_URL}}/tools/send_payment_link"
+        },
         "parameters": [
-          {"key": "call_id", "value": "{{call.id}}"}
+          {
+            "key": "call_id",
+            "value": "{{call.id}}"
+          }
         ]
       },
       {
@@ -78,18 +125,44 @@
             "properties": {
               "kind": {
                 "type": "string",
-                "enum": ["dispute_debt", "hardship", "wrong_person", "hostile", "request_human", "cease_contact", "voicemail", "already_paid", "callback_requested"]
+                "enum": [
+                  "dispute_debt",
+                  "hardship",
+                  "wrong_person",
+                  "hostile",
+                  "request_human",
+                  "cease_contact",
+                  "voicemail",
+                  "already_paid",
+                  "callback_requested"
+                ]
               },
-              "note": {"type": "string", "description": "Short free-text context, e.g. dispute reason or claimed payment date/reference"},
-              "callback_date": {"type": "string", "description": "YYYY-MM-DD — required when kind='callback_requested'"},
-              "callback_time": {"type": "string", "description": "HH:MM 24h — required when kind='callback_requested'"}
+              "note": {
+                "type": "string",
+                "description": "Short free-text context, e.g. dispute reason or claimed payment date/reference"
+              },
+              "callback_date": {
+                "type": "string",
+                "description": "YYYY-MM-DD \u2014 required when kind='callback_requested'"
+              },
+              "callback_time": {
+                "type": "string",
+                "description": "HH:MM 24h \u2014 required when kind='callback_requested'"
+              }
             },
-            "required": ["kind"]
+            "required": [
+              "kind"
+            ]
           }
         },
-        "server": {"url": "{{BACKEND_URL}}/tools/edge_case"},
+        "server": {
+          "url": "{{BACKEND_URL}}/tools/edge_case"
+        },
         "parameters": [
-          {"key": "call_id", "value": "{{call.id}}"}
+          {
+            "key": "call_id",
+            "value": "{{call.id}}"
+          }
         ]
       },
       {
@@ -102,16 +175,39 @@
             "properties": {
               "disposition": {
                 "type": "string",
-                "enum": ["PROMISE_TO_PAY", "PAYMENT_LINK_SENT", "ALREADY_PAID", "DISPUTE", "HARDSHIP", "CALLBACK_REQUESTED", "DO_NOT_CALL", "WRONG_PERSON", "ESCALATED", "NO_RESPONSE", "FAILED_VERIFICATION", "OTHER"]
+                "enum": [
+                  "PROMISE_TO_PAY",
+                  "PAYMENT_LINK_SENT",
+                  "ALREADY_PAID",
+                  "DISPUTE",
+                  "HARDSHIP",
+                  "CALLBACK_REQUESTED",
+                  "DO_NOT_CALL",
+                  "WRONG_PERSON",
+                  "ESCALATED",
+                  "NO_RESPONSE",
+                  "FAILED_VERIFICATION",
+                  "OTHER"
+                ]
               },
-              "note": {"type": "string", "description": "Optional short free-text summary"}
+              "note": {
+                "type": "string",
+                "description": "Optional short free-text summary"
+              }
             },
-            "required": ["disposition"]
+            "required": [
+              "disposition"
+            ]
           }
         },
-        "server": {"url": "{{BACKEND_URL}}/tools/mark_disposition"},
+        "server": {
+          "url": "{{BACKEND_URL}}/tools/mark_disposition"
+        },
         "parameters": [
-          {"key": "call_id", "value": "{{call.id}}"}
+          {
+            "key": "call_id",
+            "value": "{{call.id}}"
+          }
         ]
       }
     ]
@@ -133,5 +229,5 @@
   "recordingEnabled": true,
   "silenceTimeoutSeconds": 20,
   "maxDurationSeconds": 480,
-  "note": "This file is a TEMPLATE. {{BACKEND_URL}} and {{VOICE_ID}} are placeholders — do not POST this file to Vapi's API as-is. Run scripts/render_vapi_config.py, which reads BACKEND_URL and VAPI_VOICE_ID from the environment (see .env.example) and writes vapi_config/assistant_config.rendered.json with real values substituted. See docs/VAPI_DEPLOYMENT.md for the full deploy walkthrough and exactly which values must be supplied manually. Each tool also carries a top-level `parameters` array (Vapi 'static parameters') that injects call_id (and, for verify_customer, phone) directly from Vapi's server-trusted call/variable state — the LLM never sees or fills these, and no change to backend/main.py was needed because these endpoints already accept exactly this flat JSON shape. For a real phone call `{{customer.number}}` (SIP/Twilio caller ID) supplies the phone automatically; for a browser Web Call there is no telephony signaling, so the dashboard passes the selected customer's phone in as `assistantOverrides.variableValues.customer_phone` when it starts the call (see dashboard/app.py, Web Call tab) and the `default` fallback in the phone parameter picks it up."
+  "note": "This file is a TEMPLATE. {{BACKEND_URL}} and {{VOICE_ID}} are placeholders \u2014 do not POST this file to Vapi's API as-is. Run scripts/render_vapi_config.py, which reads BACKEND_URL and VAPI_VOICE_ID from the environment (see .env.example) and writes vapi_config/assistant_config.rendered.json with real values substituted. See docs/VAPI_DEPLOYMENT.md for the full deploy walkthrough and exactly which values must be supplied manually. Each tool also carries a top-level `parameters` array (Vapi 'static parameters') that injects call_id (and, for verify_customer, phone) directly from Vapi's server-trusted call/variable state \u2014 the LLM never sees or fills these, and no change to backend/main.py was needed because these endpoints already accept exactly this flat JSON shape. For a real phone call `{{customer.number}}` (SIP/Twilio caller ID) supplies the phone automatically; for a browser Web Call there is no telephony signaling, so the dashboard passes the selected customer's phone in as `assistantOverrides.variableValues.customer_phone` when it starts the call (see dashboard/app.py, Web Call tab) and the `default` fallback in the phone parameter picks it up."
 }

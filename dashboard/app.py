@@ -80,11 +80,11 @@ def api_post_delete(path):
         return 0, {"error": str(e)}
 
 
-def inr(cents):
-    """Format paise as INR, e.g. 849900 -> '₹8,499.00'."""
-    if cents is None:
+def inr(rupees):
+    """Format whole rupees as INR, e.g. 8499 -> '₹8,499'."""
+    if rupees is None:
         return "—"
-    return f"₹{cents/100:,.2f}"
+    return f"₹{rupees:,.0f}"
 
 
 STATE_ORDER = ["in_progress", "verified", "failed_verification", "escalated", "closed"]
@@ -153,10 +153,10 @@ with tab_monitor:
         ptps = api_get("/api/ptps")
         if ptps:
             df = pd.DataFrame(ptps)
-            df["amount"] = df["amount_cents"].apply(inr)
+            df["amount"] = df["amount_rupees"].apply(inr)
             st.dataframe(df[["call_id", "customer_id", "amount", "due_date", "method", "created_at"]],
                          use_container_width=True, hide_index=True)
-            st.metric("Total promised", inr(df["amount_cents"].sum()))
+            st.metric("Total promised", inr(df["amount_rupees"].sum()))
         else:
             st.caption("None logged yet.")
 
@@ -165,7 +165,7 @@ with tab_monitor:
         links = api_get("/api/payment_links")
         if links:
             df = pd.DataFrame(links)
-            df["amount"] = df["amount_cents"].apply(inr)
+            df["amount"] = df["amount_rupees"].apply(inr)
             st.dataframe(df[["call_id", "customer_id", "amount", "url", "created_at"]],
                          use_container_width=True, hide_index=True)
         else:
@@ -215,7 +215,7 @@ with tab_webcall:
 
         info1, info2, info3 = st.columns(3)
         info1.metric("Customer", wc_customer["full_name"])
-        info2.metric("Outstanding", inr(wc_customer["overdue_amount_cents"]))
+        info2.metric("Outstanding", inr(wc_customer["overdue_amount_rupees"]))
         info3.metric("Days past due", wc_customer["days_past_due"])
         st.caption(
             f"{wc_customer['loan_type']} — the agent will not disclose any of this out loud until "
@@ -260,7 +260,7 @@ with tab_sim:
     def _fresh_sim_state():
         return {
             "verified": False, "customer_id": None, "loan_type": None,
-            "overdue_amount_cents": None, "days_past_due": None, "floor_cents": None,
+            "overdue_amount_rupees": None, "days_past_due": None, "floor_rupees": None,
         }
 
     def _start_new_sim_call():
@@ -319,13 +319,13 @@ with tab_sim:
         if body.get("result") == "verified":
             state.update(
                 verified=True, customer_id=body["customer_id"], loan_type=body["loan_type"],
-                overdue_amount_cents=body["overdue_amount_cents"], days_past_due=body["days_past_due"],
-                floor_cents=body["min_settlement_cents"],
+                overdue_amount_rupees=body["overdue_amount_rupees"], days_past_due=body["days_past_due"],
+                floor_rupees=body["min_settlement_rupees"],
             )
             st.session_state.sim_state = state
             st.success(
-                f"Verified. {body['loan_type']} overdue EMI {inr(body['overdue_amount_cents'])}, "
-                f"{body['days_past_due']} days past due. (Internal floor {inr(body['min_settlement_cents'])} — never shown to caller.)"
+                f"Verified. {body['loan_type']} overdue EMI {inr(body['overdue_amount_rupees'])}, "
+                f"{body['days_past_due']} days past due. (Internal floor {inr(body['min_settlement_rupees'])} — never shown to caller.)"
             )
         elif body.get("result") == "verified_but_do_not_contact":
             st.warning("Verified, but this account is Do-Not-Call. Agent must end the call without discussing debt, and record disposition DO_NOT_CALL.")
@@ -337,27 +337,27 @@ with tab_sim:
     if not state["verified"]:
         st.info("Verify the caller above first — the backend will reject this otherwise (matches real tool behavior: HTTP 403).")
     else:
-        st.write(f"**{state['loan_type']}** overdue EMI on file: **{inr(state['overdue_amount_cents'])}** "
+        st.write(f"**{state['loan_type']}** overdue EMI on file: **{inr(state['overdue_amount_rupees'])}** "
                  f"({state['days_past_due']} days past due)")
         n1, n2, n3 = st.columns(3)
-        offer = n1.number_input("Caller's offer (₹)", min_value=0.0, value=state["overdue_amount_cents"]/100, step=100.0)
+        offer = n1.number_input("Caller's offer (₹)", min_value=0.0, value=float(state["overdue_amount_rupees"]), step=100.0)
         due = n2.date_input("Agreed due date", value=datetime.date.today() + datetime.timedelta(days=1))
         method = n3.selectbox("Method", ["upi", "debit_card", "bank_transfer", "netbanking", "other"])
         if st.button("▶️ Call log_promise_to_pay"):
             status, body = api_post("/tools/log_promise_to_pay", {
-                "call_id": call_id, "amount_cents": int(offer * 100),
+                "call_id": call_id, "amount_rupees": int(offer),
                 "due_date": due.isoformat(), "method": method,
             })
             st.json(body)
             if body.get("result") == "rejected":
-                st.error(f"Backend rejected the offer — below approved minimum of {inr(body['min_settlement_cents'])}. Agent should ask for more.")
+                st.error(f"Backend rejected the offer — below approved minimum of {inr(body['min_settlement_rupees'])}. Agent should ask for more.")
             elif body.get("result") == "logged":
                 st.success("PTP logged. Next: optionally send a payment link, then mark_disposition(PROMISE_TO_PAY).")
 
         st.markdown("#### Step 3 — Send payment link (optional)")
-        link_amt = st.number_input("Amount to charge now (₹)", min_value=0.0, value=state["overdue_amount_cents"]/100, step=100.0, key="link_amt")
+        link_amt = st.number_input("Amount to charge now (₹)", min_value=0.0, value=float(state["overdue_amount_rupees"]), step=100.0, key="link_amt")
         if st.button("▶️ Call send_payment_link"):
-            status, body = api_post("/tools/send_payment_link", {"call_id": call_id, "amount_cents": int(link_amt * 100)})
+            status, body = api_post("/tools/send_payment_link", {"call_id": call_id, "amount_rupees": int(link_amt)})
             st.json(body)
             if body.get("result") == "sent":
                 st.success(f"Link: {body['url']}")
@@ -425,8 +425,8 @@ with tab_customers:
     customers = api_get("/api/customers")
     if customers:
         df = pd.DataFrame(customers)
-        df["overdue_emi"] = df["overdue_amount_cents"].apply(inr)
-        df["min_acceptable"] = df.apply(lambda r: inr(int(r["overdue_amount_cents"] * r["min_settlement_pct"] / 100)), axis=1)
+        df["overdue_emi"] = df["overdue_amount_rupees"].apply(inr)
+        df["min_acceptable"] = df.apply(lambda r: inr(int(r["overdue_amount_rupees"] * r["min_settlement_pct"] / 100)), axis=1)
         df["do_not_call"] = df["cease_contact"].map({0: "No", 1: "Yes"})
         st.dataframe(
             df[["customer_id", "full_name", "phone", "loan_type", "overdue_emi", "days_past_due",
@@ -473,7 +473,7 @@ with tab_customers:
                     "last4": new_last4,
                     "phone": new_phone,
                     "loan_type": new_loan_type,
-                    "overdue_amount_cents": int(new_overdue_inr * 100),
+                    "overdue_amount_rupees": int(new_overdue_inr),
                     "days_past_due": int(new_dpd),
                     "min_settlement_pct": int(new_floor_pct),
                 })

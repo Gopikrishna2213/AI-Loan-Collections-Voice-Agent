@@ -29,8 +29,9 @@ disposition.
 
 **What the AI agent does, concretely.**
 1. Introduces itself and Kapture Finance without stating any account details.
-2. Verifies the caller (name + DOB + last 4 digits of the loan account, matched against
-   the caller's phone number).
+2. Verifies the caller (last 4 digits of the loan account only — this was originally a
+   3-factor check against name + DOB + phone as well, but that was deliberately
+   simplified to last-4-only; see §7 for why and the trade-off it accepts).
 3. Only on a successful match, discloses the loan type, overdue EMI amount, and days
    past due.
 4. Determines intent (will pay, hardship, dispute, already paid, callback, wrong
@@ -130,14 +131,14 @@ CALL_STARTED
    │  (row created on first tool call for this call_id; status='in_progress')
    ▼
 DISCLOSURE-BLOCKED  (implicit — this is just "status != 'verified'")
-   │  agent asks for name + DOB + last 4
+   │  agent asks for last 4 digits of the loan account
    ▼
 VERIFY_IDENTITY  -->(verify_customer tool call)-->  AUTHENTICATED  (status='verified')
    │  no match / attempt 1 or 2                                │
    ▼                                                            ▼
 [retry once]                                          DEBT_DISCLOSURE
    │  2nd failure                                               │  Maya states loan_type,
-   ▼                                                             │  overdue_amount_cents,
+   ▼                                                             │  overdue_amount_rupees,
 FAILED_VERIFICATION (status='failed_verification')              │  days_past_due — fields
    │                                                             │  returned by verify_customer
    ▼                                                             ▼
@@ -174,11 +175,11 @@ FAILED_VERIFICATION (status='failed_verification')              │  days_past_d
 | Transition | Condition (as implemented) |
 |---|---|
 | `CALL_STARTED` → any tool call | First tool call for a `call_id` implicitly creates the row (`ensure_call()`), `status='in_progress'`. |
-| `VERIFY_IDENTITY` → `AUTHENTICATED` | `POST /tools/verify_customer` finds a customer whose `phone`, `full_name` (case-insensitive), `dob`, and `last4` all match what the caller stated. Sets `status='verified'`. **This is the only transition that unlocks debt disclosure.** |
+| `VERIFY_IDENTITY` → `AUTHENTICATED` | `POST /tools/verify_customer` looks a customer up by `last4` alone (no phone/name/DOB check) — the first row in `customers` whose `last4` matches. Sets `status='verified'`. **This is the only transition that unlocks debt disclosure.** See §7 for the collision risk this accepts. |
 | `VERIFY_IDENTITY` → retry | Match fails and `verification_attempts < 2`. Returns `{"result": "failed", "attempts_remaining": ...}`; caller may try once more. |
 | `VERIFY_IDENTITY` → `FAILED_VERIFICATION` | Match fails on the 2nd attempt. `status='failed_verification'`. No further verification attempts are accepted for this `call_id` (a 3rd `verify_customer` call still just fails the same way — nothing re-opens the gate). |
-| `AUTHENTICATED` → `DEBT_DISCLOSURE` | Implicit — the `verify_customer` response itself carries `loan_type`, `overdue_amount_cents`, `days_past_due` only when `result == "verified"`. The agent is instructed to speak these; the backend has already decided whether it was allowed to know them. |
-| `INTENT_DETECTION` → `WILL_PAY` branch | Agent calls `log_promise_to_pay`. Backend requires `status == 'verified'` (`require_verified()`, HTTP 403 otherwise) and `amount_cents >= floor` (`overdue_amount_cents * min_settlement_pct / 100`), else returns `{"result": "rejected", ...}` without logging anything. |
+| `AUTHENTICATED` → `DEBT_DISCLOSURE` | Implicit — the `verify_customer` response itself carries `full_name`, `loan_type`, `overdue_amount_rupees`, `days_past_due` only when `result == "verified"`. The agent is instructed to speak these (using the returned `full_name`, not any name assumed earlier in the call); the backend has already decided whether it was allowed to know them. |
+| `INTENT_DETECTION` → `WILL_PAY` branch | Agent calls `log_promise_to_pay`. Backend requires `status == 'verified'` (`require_verified()`, HTTP 403 otherwise) and `amount_rupees >= floor` (`overdue_amount_rupees * min_settlement_pct / 100`), else returns `{"result": "rejected", ...}` without logging anything. |
 | → `send_payment_link` (optional, inside `WILL_PAY`) | Also requires `status == 'verified'`. |
 | → `HARDSHIP` / `DISPUTE` / `WRONG_PERSON` / `HOSTILE` / `REQUEST_HUMAN` / `DO_NOT_CALL` (`cease_contact`) / `ALREADY_PAID` | Agent calls `edge_case` with the matching `kind`. `hostile`, `request_human`, `dispute_debt`, and `already_paid` set `status='escalated'`. `cease_contact` additionally sets `customers.cease_contact = 1` **permanently** (so a future call to the same phone number is auto-blocked from debt disclosure at `verify_customer` time — see §7) and `status='closed'`. |
 | → `CALLBACK_REQUESTED` | Agent calls `edge_case` with `kind='callback_requested'`. Backend **requires** both `callback_date` and `callback_time` in the request — returns HTTP 422 if either is missing — and stores them on the `calls` row. |
@@ -188,7 +189,7 @@ FAILED_VERIFICATION (status='failed_verification')              │  days_past_d
 
 **The most important rule, stated explicitly:** no state, and no tool, allows debt
 disclosure while `verification_status != VERIFIED`. Concretely: `verify_customer`
-only *returns* `loan_type` / `overdue_amount_cents` / `days_past_due` in the branch
+only *returns* `full_name` / `loan_type` / `overdue_amount_rupees` / `days_past_due` in the branch
 where the DB match succeeded; `log_promise_to_pay` and `send_payment_link` call
 `require_verified()` first and raise **HTTP 403** otherwise, closing the DB connection
 before touching any customer data; and `mark_disposition` separately refuses any
@@ -218,11 +219,11 @@ regardless of what the LLM is told to do — see §7 for why that distinction ma
 
 | Entity | Type / format | Where it's captured |
 |---|---|---|
-| `customer_name` | string | Input to `verify_customer` (`full_name`); stored as `customers.full_name` |
+| `customer_name` | string | NOT an input to `verify_customer` (removed — see §7). Returned *by* `verify_customer` on success as `full_name`, read from `customers.full_name`; used to address the customer for the rest of the call |
 | `loan_type` | string, e.g. `"Personal Loan"` | `customers.loan_type`; returned by `verify_customer` on success |
-| `overdue_amount` | integer, paise (INR × 100) | `customers.overdue_amount_cents`; returned as `overdue_amount_cents` |
+| `overdue_amount` | integer, whole rupees (INR) | `customers.overdue_amount_rupees`; returned as `overdue_amount_rupees` |
 | `days_past_due` | integer | `customers.days_past_due`; returned by `verify_customer` |
-| `ptp_amount` | integer, paise | Input to `log_promise_to_pay` (`amount_cents`); stored in `ptps.amount_cents` |
+| `ptp_amount` | integer, whole rupees (INR) | Input to `log_promise_to_pay` (`amount_rupees`); stored in `ptps.amount_rupees` |
 | `ptp_date` | `YYYY-MM-DD` | Input to `log_promise_to_pay` (`due_date`); stored in `ptps.due_date` |
 | `callback_date` | `YYYY-MM-DD` | Input to `edge_case` when `kind='callback_requested'`; stored in `calls.callback_date` |
 | `callback_time` | `HH:MM` (24h) | Input to `edge_case` when `kind='callback_requested'`; stored in `calls.callback_time` |
@@ -240,24 +241,24 @@ the actual shapes returned by the code, not illustrative examples.
 ### `verify_customer`
 - **Purpose:** The verification gate. Must be called, and must return `result:
   "verified"`, before any other tool will disclose or act on debt information.
-- **Input schema:** `{call_id: str, phone: str, full_name: str, dob: "YYYY-MM-DD", last4: str}`
-- **Output schema (success):** `{result: "verified", customer_id, loan_type, overdue_amount_cents, days_past_due, min_settlement_cents}`
+- **Input schema:** `{call_id: str, phone: str | null, last4: str}` — `phone` is still accepted (Vapi always sends it as a static parameter) but is **no longer used for matching or validation**; only `last4` determines the match. See §7 for why this was simplified and what it trades away.
+- **Output schema (success):** `{result: "verified", customer_id, full_name, loan_type, overdue_amount_rupees, days_past_due, min_settlement_rupees}`
 - **Output schema (other outcomes):** `{result: "failed", attempts_remaining: int}` · `{result: "failed_max_attempts", instruction: str}` · `{result: "verified_but_do_not_contact", customer_id, instruction: str}` · `{result: "blocked", reason: str}`
 - **Auth/state requirement:** none to *call* it (it's how verification happens), but it enforces a 2-attempt cap per `call_id` and refuses to re-run on an already-escalated call.
 - **Failure behavior:** never raises an HTTP error; every outcome is a `200` with a `result` field the agent is instructed to branch on. No debt fields are present in any non-`"verified"` response.
 
 ### `log_promise_to_pay` (also reachable as `log_ptp`, kept as a compatibility alias — see note below)
 - **Purpose:** Record a promise-to-pay after the caller agrees to an amount and date.
-- **Input schema:** `{call_id: str, amount_cents: int > 0, due_date: "YYYY-MM-DD", method: "upi"|"debit_card"|"bank_transfer"|"netbanking"|"other"}`
+- **Input schema:** `{call_id: str, amount_rupees: int > 0, due_date: "YYYY-MM-DD", method: "upi"|"debit_card"|"bank_transfer"|"netbanking"|"other"}`
 - **Output schema (accepted):** `{result: "logged", ptp_id: str}`
-- **Output schema (below floor):** `{result: "rejected", reason: str, min_settlement_cents: int}`
+- **Output schema (below floor):** `{result: "rejected", reason: str, min_settlement_rupees: int}`
 - **Auth/state requirement:** `require_verified()` — **HTTP 403** if `calls.status != 'verified'**.
-- **Failure behavior:** 403 (not verified) or a non-error `"rejected"` result (verified, but the offer is below `overdue_amount_cents * min_settlement_pct / 100`) — the model is told the floor exists but is never told the number, and cannot talk the backend past it.
+- **Failure behavior:** 403 (not verified) or a non-error `"rejected"` result (verified, but the offer is below `overdue_amount_rupees * min_settlement_pct / 100`) — the model is told the floor exists but is never told the number, and cannot talk the backend past it.
 - **Naming note:** the original prototype named this tool `log_ptp`. The assignment's required name is `log_promise_to_pay`. Both now work — `log_promise_to_pay` is the primary implementation, and `POST /tools/log_ptp` is a thin alias calling the same function, so nothing that already depended on the old name breaks (per the "don't remove working functionality" constraint).
 
 ### `send_payment_link`
 - **Purpose:** Generate a payment link for the agreed amount.
-- **Input schema:** `{call_id: str, amount_cents: int > 0}`
+- **Input schema:** `{call_id: str, amount_rupees: int > 0}`
 - **Output schema:** `{result: "sent", url: str}`
 - **Auth/state requirement:** `require_verified()` — HTTP 403 if not verified.
 - **Failure behavior:** HTTP 403 only. **Mocked:** the URL is `https://pay.kapturefinance-mock.com/l/<random8>` — no real payment processor is called (see §13).
@@ -279,7 +280,7 @@ the actual shapes returned by the code, not illustrative examples.
 ### `create_customer` / `delete_customer` (ops/admin, not a Vapi tool)
 - **Purpose:** Add or remove a mock loan account, so the customer list isn't limited to what's hardcoded in the seed data. Added after the initial build in response to a real need (managing test accounts without editing `backend/main.py` and wiping the DB).
 - **Route:** `POST /api/customers` (create), `DELETE /api/customers/{customer_id}` (remove). Deliberately under `/api/*`, not `/tools/*` — Maya never calls this mid-call; it's exposed for the dashboard's "Add Customer" form and for direct `curl` use.
-- **Input schema (create):** `{full_name, dob: "YYYY-MM-DD", last4, phone, loan_type?, overdue_amount_cents, days_past_due, min_settlement_pct?}`
+- **Input schema (create):** `{full_name, dob: "YYYY-MM-DD", last4, phone, loan_type?, overdue_amount_rupees, days_past_due, min_settlement_pct?}`
 - **Output schema:** `{result: "created", customer_id}` · `{result: "deleted", customer_id}`
 - **Auth/state requirement:** none (this is an ops action on the mock account list, not a debt-disclosure path — no verification concept applies to creating a record). `phone` must be unique — it's the same lookup key `verify_customer` matches against.
 - **Failure behavior:** `POST` returns **HTTP 409** if the phone number is already in use; `DELETE` returns **HTTP 404** for an unknown `customer_id`. Deleting a customer does not touch any `calls`/`ptps`/`events` rows already logged against that `customer_id` — historical records are preserved even if the account itself is removed.
@@ -288,18 +289,33 @@ the actual shapes returned by the code, not illustrative examples.
 
 ## 7. Authentication and Data Safety
 
-**Identity verification.** Three factors, all caller-stated and checked against the
-mock customer record matched by phone number: full legal name (case-insensitive),
-date of birth, and the last 4 digits of the loan account. All three must match.
+**Identity verification.** Originally three factors (full legal name, date of birth,
+and last 4 digits, matched against the record found by phone number). This was
+deliberately simplified to **one factor**: the last 4 digits of the loan account,
+looked up directly (`SELECT * FROM customers WHERE last4=?`, first match wins) —
+phone, name, and DOB are no longer read by `verify_customer` at all, though they
+remain stored on the customer record. This trade-off was made explicitly, not by
+accident:
+- **Why:** repeated live testing showed the 3-factor + phone-lookup combination
+  producing verification failures that were hard to diagnose (stale local DB state,
+  phone-format mismatches between what Vapi sends and what's seeded), which blocked
+  testing more than it protected anything in a mock system. Removing phone and
+  the two extra factors was a deliberate simplification for this prototype.
+- **What it costs:** last4 alone is a weak identity check — 10,000 possible values,
+  no longer bound to a specific phone number at all, and if two customer records
+  ever shared the same `last4`, the lookup returns whichever row SQLite finds first
+  with no disambiguation. For a real financial-services deployment disclosing debt
+  details, this is meaningfully weaker than the original 3-factor design, and should
+  be revisited before production — see §13.
 
-**Verification attempts.** Two attempts per `call_id`. `calls.verification_attempts`
-increments on every failed match. On the 2nd failure, `calls.status` is set to
-`failed_verification` and stays there — a 3rd `verify_customer` call for the same
-`call_id` is still evaluated (there's no separate lockout error), but it can't move
-the call to `verified` in a way that changes this section's guarantee, because the
-underlying match still has to be genuinely correct, and even a lucky 3rd match would
-now be talking to a caller who has already had two mismatches on identity — see §13
-for the production recommendation to hard-lock after 2 regardless of subsequent input.
+**Verification attempts.** Two attempts per `call_id`, unchanged by the last4-only
+simplification above. `calls.verification_attempts` increments on every failed
+match. On the 2nd failure, `calls.status` is set to `failed_verification` and stays
+there — a 3rd `verify_customer` call for the same `call_id` is still evaluated
+(there's no separate lockout error), but it can't move the call to `verified` in a
+way that changes this section's guarantee, because the underlying match still has to
+be genuinely correct — see §13 for the production recommendation to hard-lock after
+2 regardless of subsequent input.
 
 **What happens after failed verification.** No account or debt information is ever
 included in the response. The agent's instructions are to apologize, decline to
@@ -307,8 +323,10 @@ discuss anything account-specific, and — after max attempts — offer a callba
 verified channel and record `FAILED_VERIFICATION`.
 
 **No debt disclosure to third parties — the wrong-person scenario.** If the person who
-answers is not the account holder, verification will not match ​(different name/DOB/
-last4), and the failure branch above applies: **no debt information is ever returned by
+answers doesn't know the correct last4, verification will not match, and the failure
+branch above applies. (Note: since last4 is the only factor now, someone who *does*
+know or guess the correct last4 — even without being the account holder — will pass
+verification; this is the direct cost of the simplification described above.) **no debt information is ever returned by
 `verify_customer` on a non-match, structurally** — the response schema for a failed
 match (`{"result": "failed", "attempts_remaining": ...}`) has no field for loan type,
 amount, or due date at all. Concretely:
@@ -334,8 +352,10 @@ independently re-checks that verification actually happened for any debt-related
 disposition, so the enforcement doesn't rely on the LLM having followed the prompt's
 instructions in order — the two checks are redundant on purpose.
 
-**Sensitive information handling.** All monetary values are stored as integer paise to
-avoid floating-point drift. The negotiation floor (`min_settlement_cents`) is computed
+**Sensitive information handling.** All monetary values are stored as whole rupees
+(no paise, no floats) so neither the backend nor the LLM ever has to convert units —
+see the README's design-notes section for the currency bug this was meant to prevent.
+The negotiation floor (`min_settlement_rupees`) is computed
 server-side and is explicitly never included in what the agent is told to say to the
 caller (the system prompt says so, and the backend never needs to be asked not to leak
 it, since nothing forces it into the response — it's simply also present in the JSON
@@ -503,7 +523,7 @@ code.
   database level (today a 3rd `verify_customer` call is still evaluated against the
   same data, it just can't succeed any more easily); consider a secondary
   out-of-band verification channel (OTP to registered mobile) instead of
-  knowledge-based (DOB/last-4) verification alone.
+  knowledge-based (last-4 alone, currently the only factor — see §7) verification.
 - **Regulatory controls:** encode permitted-calling-hours, consent/recording
   disclosure, and jurisdiction-specific collections rules (e.g., RBI's Fair Practices
   Code equivalents) as backend guardrails — e.g., a tool call rejected outside allowed
@@ -529,7 +549,7 @@ code.
 | Assignment-spec name | Implementation | Notes |
 |---|---|---|
 | `verify_customer` | `verify_customer` | Same name, unchanged from the original prototype. |
-| `get_account_details` (if applicable) | *(not a separate tool)* | Folded into `verify_customer`'s success response (`loan_type`, `overdue_amount_cents`, `days_past_due`) — there is no second round-trip to fetch account details, since the same DB row already has them. |
+| `get_account_details` (if applicable) | *(not a separate tool)* | Folded into `verify_customer`'s success response (`full_name`, `loan_type`, `overdue_amount_rupees`, `days_past_due`) — there is no second round-trip to fetch account details, since the same DB row already has them. |
 | `log_promise_to_pay` | `log_promise_to_pay` (new primary route), `log_ptp` (compatibility alias) | The original prototype used `log_ptp`; both work now. |
 | `send_payment_link` | `send_payment_link` | Same name, unchanged. |
 | edge-case handling | `edge_case` | One tool, `kind` enum, extended in this revision with `already_paid` and `callback_requested` (Task 3.A/3.B) alongside the original `dispute_debt`, `hardship`, `wrong_person`, `hostile`, `request_human`, `cease_contact`, `voicemail`. |

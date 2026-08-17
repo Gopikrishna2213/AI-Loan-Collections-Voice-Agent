@@ -30,8 +30,7 @@ Design notes (see docs/HLD.md for the full writeup):
   would reveal or act on debt information will do anything for a given
   call_id. This is enforced HERE, in code, not just in the system prompt —
   see `require_verified()` below and its use in every debt-related tool.
-- All amounts are stored as integer cents/paise (INR) to avoid float issues.
-  1 INR = 100 paise, so amount_cents=849900 means ₹8,499.00.
+- All amounts are stored as whole rupees (INR) — no paise, no cents, no float math.
 """
 
 import sqlite3
@@ -119,7 +118,7 @@ def init_db():
             last4       TEXT NOT NULL,          -- last 4 of loan account, second verification factor
             phone       TEXT NOT NULL,
             loan_type   TEXT NOT NULL DEFAULT 'Personal Loan',
-            overdue_amount_cents INTEGER NOT NULL,   -- paise; 100 = Rupee 1.00
+            overdue_amount_rupees INTEGER NOT NULL,  -- whole rupees, no paise
             days_past_due INTEGER NOT NULL DEFAULT 0,
             min_settlement_pct INTEGER NOT NULL DEFAULT 100, -- floor for a PTP, % of overdue amount
             cease_contact INTEGER NOT NULL DEFAULT 0
@@ -140,7 +139,7 @@ def init_db():
             ptp_id TEXT PRIMARY KEY,
             call_id TEXT NOT NULL,
             customer_id TEXT NOT NULL,
-            amount_cents INTEGER NOT NULL,
+            amount_rupees INTEGER NOT NULL,
             due_date TEXT NOT NULL,
             method TEXT NOT NULL,
             created_at TEXT NOT NULL
@@ -150,7 +149,7 @@ def init_db():
             link_id TEXT PRIMARY KEY,
             call_id TEXT NOT NULL,
             customer_id TEXT NOT NULL,
-            amount_cents INTEGER NOT NULL,
+            amount_rupees INTEGER NOT NULL,
             url TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
@@ -183,10 +182,26 @@ def init_db():
     ]:
         if col not in cust_cols:
             c.execute(ddl)
-    # rename legacy balance_cents -> overdue_amount_cents if this DB predates the rename
-    if "balance_cents" in cust_cols and "overdue_amount_cents" not in cust_cols:
-        c.execute("ALTER TABLE customers ADD COLUMN overdue_amount_cents INTEGER")
-        c.execute("UPDATE customers SET overdue_amount_cents = balance_cents")
+    # rename legacy balance_cents -> overdue_amount_rupees if this DB predates the rename
+    # (handles both the original balance_cents column and the intermediate
+    # overdue_amount_cents column, converting paise to whole rupees)
+    if "overdue_amount_rupees" not in cust_cols:
+        if "balance_cents" in cust_cols:
+            c.execute("ALTER TABLE customers ADD COLUMN overdue_amount_rupees INTEGER")
+            c.execute("UPDATE customers SET overdue_amount_rupees = balance_cents / 100")
+        elif "overdue_amount_cents" in cust_cols:
+            c.execute("ALTER TABLE customers ADD COLUMN overdue_amount_rupees INTEGER")
+            c.execute("UPDATE customers SET overdue_amount_rupees = overdue_amount_cents / 100")
+
+    ptp_cols = {row["name"] for row in c.execute("PRAGMA table_info(ptps)").fetchall()}
+    if "amount_rupees" not in ptp_cols and "amount_cents" in ptp_cols:
+        c.execute("ALTER TABLE ptps ADD COLUMN amount_rupees INTEGER")
+        c.execute("UPDATE ptps SET amount_rupees = amount_cents / 100")
+
+    link_cols = {row["name"] for row in c.execute("PRAGMA table_info(payment_links)").fetchall()}
+    if "amount_rupees" not in link_cols and "amount_cents" in link_cols:
+        c.execute("ALTER TABLE payment_links ADD COLUMN amount_rupees INTEGER")
+        c.execute("UPDATE payment_links SET amount_rupees = amount_cents / 100")
 
     # Seed demo accounts if empty. Rahul Sharma is the PRIMARY assignment
     # demo account (Task 4). A couple of secondary accounts are kept so the
@@ -197,19 +212,19 @@ def init_db():
         c.executemany(
             """INSERT INTO customers
                (customer_id, full_name, dob, last4, phone, loan_type,
-                overdue_amount_cents, days_past_due, min_settlement_pct, cease_contact)
+                overdue_amount_rupees, days_past_due, min_settlement_pct, cease_contact)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
             [
                 # Primary assignment demo account — Task 4.
                 ("cust_rahul", "Rahul Sharma", "1990-06-15", "4321", "+919876543210",
-                 "Personal Loan", 849900, 12, 100, 0),
+                 "Personal Loan", 8499, 12, 100, 0),
                 # Secondary accounts kept for other demo scenarios.
                 ("cust_002", "Priya Nair", "1988-11-02", "9310", "+919810000002",
-                 "Personal Loan", 1250000, 25, 70, 0),
+                 "Personal Loan", 12500, 25, 70, 0),
                 ("cust_003", "Michael Fernandes", "1985-07-23", "1123", "+919810000003",
-                 "Two-Wheeler Loan", 2100000, 45, 80, 0),
+                 "Two-Wheeler Loan", 21000, 45, 80, 0),
                 ("cust_004", "Devon Blake", "1995-01-30", "5567", "+919810000004",
-                 "Personal Loan", 760000, 30, 70, 1),  # already opted out (DNC)
+                 "Personal Loan", 7600, 30, 70, 1),  # already opted out (DNC)
             ],
         )
     conn.commit()
@@ -272,14 +287,14 @@ class VerifyCustomerRequest(BaseModel):
 
 class LogPromiseToPayRequest(BaseModel):
     call_id: str
-    amount_cents: int = Field(..., gt=0, description="Agreed payment amount in paise")
+    amount_rupees: int = Field(..., gt=0, description="Agreed payment amount in whole rupees (INR)")
     due_date: str = Field(..., description="YYYY-MM-DD the caller agreed to pay by")
     method: Literal["upi", "debit_card", "bank_transfer", "netbanking", "other"] = "other"
 
 
 class SendPaymentLinkRequest(BaseModel):
     call_id: str
-    amount_cents: int = Field(..., gt=0)
+    amount_rupees: int = Field(..., gt=0, description="Amount in whole rupees (INR)")
 
 
 class EdgeCaseRequest(BaseModel):
@@ -327,7 +342,7 @@ class CreateCustomerRequest(BaseModel):
     last4: str = Field(..., description="Last 4 digits of the loan account")
     phone: str = Field(..., description="E.164-ish, e.g. +919876543210 — must be unique")
     loan_type: str = "Personal Loan"
-    overdue_amount_cents: int = Field(..., gt=0, description="Overdue EMI in paise (INR * 100)")
+    overdue_amount_rupees: int = Field(..., gt=0, description="Overdue EMI in whole rupees (INR)")
     days_past_due: int = Field(..., ge=0)
     min_settlement_pct: int = Field(100, ge=1, le=100, description="Floor for a PTP, % of overdue amount")
 
@@ -379,10 +394,11 @@ def verify_customer(req: VerifyCustomerRequest):
         result = {
             "result": "verified",
             "customer_id": cust["customer_id"],
+            "full_name": cust["full_name"],
             "loan_type": cust["loan_type"],
-            "overdue_amount_cents": cust["overdue_amount_cents"],
+            "overdue_amount_rupees": cust["overdue_amount_rupees"],
             "days_past_due": cust["days_past_due"],
-            "min_settlement_cents": int(cust["overdue_amount_cents"] * cust["min_settlement_pct"] / 100),
+            "min_settlement_rupees": int(cust["overdue_amount_rupees"] * cust["min_settlement_pct"] / 100),
         }
         conn.close()
         return result
@@ -414,22 +430,22 @@ def log_promise_to_pay(req: LogPromiseToPayRequest):
     call = require_verified(conn, req.call_id)  # raises 403 + closes conn if not verified
 
     cust = conn.execute("SELECT * FROM customers WHERE customer_id=?", (call["customer_id"],)).fetchone()
-    floor = int(cust["overdue_amount_cents"] * cust["min_settlement_pct"] / 100)
-    if req.amount_cents < floor:
+    floor = int(cust["overdue_amount_rupees"] * cust["min_settlement_pct"] / 100)
+    if req.amount_rupees < floor:
         conn.close()
         return {
             "result": "rejected",
-            "reason": f"Offer is below the approved minimum of {floor} paise for this account.",
-            "min_settlement_cents": floor,
+            "reason": f"Offer is below the approved minimum of Rs {floor} for this account.",
+            "min_settlement_rupees": floor,
         }
 
     ptp_id = str(uuid.uuid4())
     conn.execute(
-        "INSERT INTO ptps (ptp_id, call_id, customer_id, amount_cents, due_date, method, created_at) VALUES (?,?,?,?,?,?,?)",
-        (ptp_id, req.call_id, cust["customer_id"], req.amount_cents, req.due_date, req.method, now()),
+        "INSERT INTO ptps (ptp_id, call_id, customer_id, amount_rupees, due_date, method, created_at) VALUES (?,?,?,?,?,?,?)",
+        (ptp_id, req.call_id, cust["customer_id"], req.amount_rupees, req.due_date, req.method, now()),
     )
     log_event(conn, req.call_id, "log_promise_to_pay",
-              f"PTP logged: paise {req.amount_cents} due {req.due_date} via {req.method}")
+              f"PTP logged: Rs {req.amount_rupees} due {req.due_date} via {req.method}")
     conn.commit()
     conn.close()
     return {"result": "logged", "ptp_id": ptp_id}
@@ -451,10 +467,10 @@ def send_payment_link(req: SendPaymentLinkRequest):
     link_id = str(uuid.uuid4())[:8]
     url = f"https://pay.kapturefinance-mock.com/l/{link_id}"
     conn.execute(
-        "INSERT INTO payment_links (link_id, call_id, customer_id, amount_cents, url, created_at) VALUES (?,?,?,?,?,?)",
-        (link_id, req.call_id, call["customer_id"], req.amount_cents, url, now()),
+        "INSERT INTO payment_links (link_id, call_id, customer_id, amount_rupees, url, created_at) VALUES (?,?,?,?,?,?)",
+        (link_id, req.call_id, call["customer_id"], req.amount_rupees, url, now()),
     )
-    log_event(conn, req.call_id, "send_payment_link", f"Link sent for paise {req.amount_cents}: {url}")
+    log_event(conn, req.call_id, "send_payment_link", f"Link sent for Rs {req.amount_rupees}: {url}")
     conn.commit()
     conn.close()
     return {"result": "sent", "url": url}
@@ -567,10 +583,10 @@ def create_customer(req: CreateCustomerRequest):
     conn.execute(
         """INSERT INTO customers
            (customer_id, full_name, dob, last4, phone, loan_type,
-            overdue_amount_cents, days_past_due, min_settlement_pct, cease_contact)
+            overdue_amount_rupees, days_past_due, min_settlement_pct, cease_contact)
            VALUES (?,?,?,?,?,?,?,?,?,0)""",
         (customer_id, req.full_name, req.dob, req.last4, req.phone, req.loan_type,
-         req.overdue_amount_cents, req.days_past_due, req.min_settlement_pct),
+         req.overdue_amount_rupees, req.days_past_due, req.min_settlement_pct),
     )
     conn.commit()
     conn.close()

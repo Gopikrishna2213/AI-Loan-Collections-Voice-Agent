@@ -109,8 +109,8 @@ a real phone call, which is why `backend/main.py` and the tool contracts needed
 (Vapi's *static parameters* — see [Vapi's docs](https://docs.vapi.ai/tools/static-variables-and-aliases))
 that injects `call_id` (and, for `verify_customer`, `phone`) straight from
 Vapi's server-trusted call state, invisible to and unforgeable by the model —
-the LLM only ever fills the fields it always filled (`full_name`, `dob`,
-`last4`, `amount_cents`, ...). For a real phone call, `phone` resolves from
+the LLM only ever fills the fields it always filled (`last4`,
+`amount_rupees`, ...). For a real phone call, `phone` resolves from
 the caller's SIP/Twilio caller-ID (`{{customer.number}}`); for a browser Web
 Call there's no telephony signaling, so the dashboard passes the selected
 customer's phone in via `assistantOverrides.variableValues.customer_phone`
@@ -170,7 +170,7 @@ restart" gotcha) in `docs/VAPI_DEPLOYMENT.md` §1.
 | Component | Choice | Why |
 |---|---|---|
 | LLM | `claude-sonnet-4-6` (Anthropic), `temperature: 0.3` | Reliable tool-calling with a 5-tool schema, strong instruction-following for the compliance rules (never disclose pre-verification, never fabricate a tool result), low enough temperature to keep the EMI figure and dates precise instead of creatively paraphrased |
-| Transcriber | Deepgram `nova-2`, `language: en`, `smartFormat: true` | Low-latency streaming STT with good accuracy on spoken names/dates/digits (DOB, last-4, amounts) over phone-quality audio; `smartFormat` normalizes spoken numbers, which matters for `verify_customer`'s exact-match DOB/last-4 check |
+| Transcriber | Deepgram `nova-2`, `language: en`, `smartFormat: true` | Low-latency streaming STT with good accuracy on spoken digits (last-4, amounts) over phone-quality audio; `smartFormat` normalizes spoken numbers, which matters for `verify_customer`'s exact-match last-4 check |
 | Voice (TTS) | ElevenLabs, `voiceId` placeholder | Clear, natural speech for a debt-collection context where tone matters (calm, non-threatening); the actual voice ID must be chosen from your own ElevenLabs account/voice library — cannot be fabricated here |
 
 **Manual values still required** (cannot be supplied by this repo — see
@@ -181,7 +181,7 @@ restart" gotcha) in `docs/VAPI_DEPLOYMENT.md` §1.
 
 | Tool | Purpose | Gate |
 |---|---|---|
-| `verify_customer` | Match caller's stated name/DOB/last-4 against the account on file | 2-attempt cap per call |
+| `verify_customer` | Match caller's stated last 4 digits of the loan account against the account on file | 2-attempt cap per call |
 | `log_promise_to_pay` (alias `log_ptp`) | Record an agreed amount + due date | Requires `status='verified'`; rejects offers below the account's floor |
 | `send_payment_link` | Generate a payment link | Requires `status='verified'` |
 | `edge_case` | Log dispute / hardship / wrong_person / hostile / request_human / cease_contact / voicemail / already_paid / callback_requested | `callback_requested` requires both `callback_date` and `callback_time` |
@@ -192,7 +192,9 @@ Full request/response schemas: `docs/HLD.md` §6.
 **Adding a customer.** The five tools above are what Maya calls mid-call — none of
 them create accounts. To add a new mock loan account:
 - **Dashboard:** Customers tab → "➕ Add a customer" form (name, DOB, last 4, phone,
-  loan type, overdue EMI, days past due, settlement floor). There's a matching
+  loan type, overdue EMI, days past due, settlement floor — DOB and phone are still
+  stored for record-keeping, but are no longer checked by `verify_customer`, which
+  now matches on last 4 digits alone). There's a matching
   "🗑️ Remove a customer" expander below it.
 - **Directly:** `POST {BACKEND_URL}/api/customers` with the same fields (see
   `CreateCustomerRequest` in `backend/main.py`), e.g.:
@@ -200,7 +202,7 @@ them create accounts. To add a new mock loan account:
   curl -X POST $BACKEND_URL/api/customers -H "Content-Type: application/json" -d '{
     "full_name": "Sunita Iyer", "dob": "1992-03-10", "last4": "7788",
     "phone": "+919800011122", "loan_type": "Personal Loan",
-    "overdue_amount_cents": 500000, "days_past_due": 8, "min_settlement_pct": 100
+    "overdue_amount_rupees": 5000, "days_past_due": 8, "min_settlement_pct": 100
   }'
   ```
   Phone number must be unique (returns `409` otherwise) — it's the lookup key
@@ -212,9 +214,9 @@ them create accounts. To add a new mock loan account:
 **The rule:** debt information is never disclosed before successful verification —
 enforced in `backend/main.py`, not only in the prompt.
 
-- `verify_customer`'s response only contains `loan_type` / `overdue_amount_cents` /
-  `days_past_due` in the branch where the match succeeded — structurally, a failed or
-  unverified call gets a response shape with no debt fields at all.
+- `verify_customer`'s response only contains `loan_type` / `overdue_amount_rupees` /
+  `days_past_due` / `full_name` in the branch where the match succeeded — structurally,
+  a failed or unverified call gets a response shape with no debt fields at all.
 - `require_verified()` gates `log_promise_to_pay` and `send_payment_link`: **HTTP
   403** if `calls.status != 'verified'`.
 - `mark_disposition` independently refuses to record `PROMISE_TO_PAY`,
@@ -323,9 +325,12 @@ Telephony → Vapi → Maya → Backend tools → SQLite → Dashboard.
 - **Kept `log_ptp` working as an alias** for the newly-primary `log_promise_to_pay`
   name, rather than a breaking rename, per the "don't remove working functionality"
   constraint.
-- **Amounts stored as integer paise**, not floats or rupee decimals, to avoid
-  floating-point drift in a financial system; converted to `₹` display only in the UI
-  layer (`dashboard/app.py`'s `inr()` helper).
+- **Amounts stored as whole rupees**, not paise or floats, so neither the LLM nor the
+  backend ever has to multiply/divide currency — a live test showed the model
+  misconverting a spoken rupee amount when the system used paise internally, so all
+  money fields (`overdue_amount_rupees`, `amount_rupees`, `min_settlement_rupees`) are
+  plain integers in ₹, with `dashboard/app.py`'s `inr()` helper only formatting the
+  `₹` display, never converting units.
 - **SQLite, not an external DB:** keeps the whole stack runnable with zero external
   dependencies while still giving the dashboard and backend one shared source of
   truth, instead of in-memory state that would reset per process and break a

@@ -198,7 +198,6 @@
       try {
         await vapi.start(assistantId, {
           variableValues: {
-            customer_phone: c.phone,
             customer_name: c.full_name,
             outstanding_amount: money(c.overdue_amount_cents),
           },

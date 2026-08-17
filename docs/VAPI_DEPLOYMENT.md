@@ -163,9 +163,8 @@ curl -s $BACKEND_URL/health
    this repo doesn't wrap one).
 3. Call the number, or trigger an outbound call to your own phone.
 4. Answer, and go through the PTP scenario in §5 of `README.md` / Task 5 of the
-   assignment: confirm you're Rahul Sharma, verify with last 4 `4321` — this must be
-   called from/as `+919876543210` (Rahul's seeded phone), since `verify_customer`
-   now requires phone AND last4 to both match — hear the EMI disclosed, then say
+   assignment: confirm you're Rahul Sharma, verify with DOB `1990-06-15` and last 4
+   `4321` — both spoken, and both must match — hear the EMI disclosed, then say
    "I can pay tomorrow" / "₹8,499".
 
 ## 5b. Web Call — testing from the browser instead of a phone
@@ -208,14 +207,6 @@ the following could be exercised from this sandbox; verify them in yours):
   a live browser from this sandbox — if the mic prompt never appears, this is the
   first thing to check (browser devtools console error mentioning `Permissions
   Policy` or `NotAllowedError` on an iframe, not a top-level page, confirms it).
-- The `{{ customer_phone | default: customer.number }}` Liquid expression in
-  `verify_customer`'s static parameters (see `vapi_config/assistant_config.json`)
-  assumes Vapi's Liquid engine supports `default` with a variable (not just a
-  literal) as the fallback argument — standard LiquidJS behavior, but not confirmed
-  against Vapi's specific implementation from here. If `phone` ever arrives empty at
-  the backend for a Web Call, hardcode the tool's static parameter to
-  `{{customer_phone}}` only (Web Call) vs. `{{customer.number}}` only (phone call) as
-  a fallback — two assistants, or two versions of the tool, would both work.
 - Whether the Web SDK's `call-start` event payload exposes `vapi.call.id` in the
   currently installed SDK version — the widget defensively no-ops if it doesn't
   (falls back to "check Live Monitor" instead of showing a Call ID).
@@ -267,7 +258,7 @@ real test call: open the call in the Vapi dashboard's Call Logs, or call Vapi's
 |---|---|---|
 | Vapi assistant creation fails / 401 | Bad or missing `VAPI_API_KEY` | Re-check the key in the Vapi dashboard's API Keys section |
 | Tool calls never reach the backend (nothing shows in the dashboard during a real call) | `BACKEND_URL` still pointing at `localhost`, or backend not publicly deployed | Redeploy backend somewhere public; re-render and re-deploy the assistant config |
-| Maya discloses nothing about the EMI even after correct answers | `verify_customer`'s `phone` doesn't match any seeded customer — Vapi's caller-ID field name/format may differ from what's assumed here | Check what phone format Vapi actually sends (may need a country-code normalization step in `verify_customer` — not currently implemented) and match it against `customers.phone` in `backend/main.py` |
+| Maya discloses nothing about the EMI even after correct answers | `verify_customer`'s `dob`/`last4` don't match any seeded customer — check STT normalized the spoken DOB to `YYYY-MM-DD` and the last4 exactly | Check `/api/events` for the raw `verify_customer` call the model made and compare against `customers.dob`/`customers.last4` in `backend/main.py`; add a DOB-format normalization step if STT is returning a different date format |
 | `log_promise_to_pay` always returns `"rejected"` | Offer below the account's floor (`min_settlement_pct`) | For Rahul Sharma the floor is 100% of ₹8,499 — the demo script requires offering the full amount |
 | `edge_case(kind='callback_requested')` returns HTTP 422 | Missing `callback_date` or `callback_time` | Both are required together — see the tool schema in `vapi_config/assistant_config.json` |
 | Dashboard shows nothing | `BACKEND_URL` env var not set for `dashboard/app.py`, or backend not running | `export BACKEND_URL=...` before `streamlit run dashboard/app.py`, confirm `/health` responds |
@@ -277,7 +268,7 @@ real test call: open the call in the Vapi dashboard's Call Logs, or call Vapi's
 | Web Call page shows missing Vapi configuration | `VAPI_PUBLIC_KEY` and/or `VAPI_ASSISTANT_ID` missing on the FastAPI/Render service | Add both variables to the backend service and restart/redeploy it; verify `/api/webcall-config` returns 200 |
 | Web Call: Daily reports `Invalid target origin 'null'` | Vapi/Daily is being run inside a sandboxed Streamlit component iframe | Use the backend-served `/webcall` page; do not reintroduce `st.components.v1.html()` for the Vapi SDK |
 | Web Call: clicking Start does nothing / mic prompt never appears | Browser blocked microphone access or `esm.sh` unreachable | Open the backend `/webcall` page directly over HTTPS, allow microphone access, and check browser devtools/network if the CDN is blocked |
-| Web Call: `verify_customer` never succeeds even with correct answers | `phone` static parameter resolved empty (see §5b's Liquid caveat) | Confirm the dashboard is passing `customer_phone` in `variableValues` (Network tab on Vapi's side, or check `/api/events` for the raw `verify_customer` event detail) |
+| Web Call: `verify_customer` never succeeds even with correct answers | Since `verify_customer` takes no static/caller-ID parameters, this is almost always a spoken-value/STT issue, not a Web Call-specific one | Check `/api/events` for the raw `verify_customer` event detail and compare the `dob`/`last4` Vapi actually sent against the seeded customer row |
 
 ## 10. What still requires an actual real call
 
@@ -286,17 +277,16 @@ and the system prompt — it has not been confirmed against a live Vapi call fro
 environment (no outbound network access here to reach Vapi/Deepgram/ElevenLabs, and
 no live credentials configured). Specifically unverified:
 
-- Real STT accuracy on spoken last-4 digits (numbers are one of the harder STT
-  cases to transcribe reliably over phone-quality audio).
+- Real STT accuracy on spoken last-4 digits and spoken dates of birth (both are
+  among the harder STT cases to transcribe reliably over phone-quality audio; DOB in
+  particular needs consistent normalization to `YYYY-MM-DD` across accents/formats).
 - Real end-to-end turn latency against the §12 budget in `docs/HLD.md`.
-- Whether Vapi's actual caller-ID phone format matches `customers.phone` in the mock
-  DB (`+919876543210`) without normalization.
 - Silence/voicemail detection behavior against Vapi's real `silenceTimeoutSeconds`
   setting.
 - Recording retrieval (§8 above).
 - Everything listed under §5b's "Known blockers / unverified in this environment"
   for the browser Web Call path specifically (mic-in-iframe permission, `esm.sh`
-  reachability, the Liquid `default` filter fallback, and the Web SDK's `call.id`
+  reachability, and the Web SDK's `call.id`
   exposure).
 
 Whoever runs the real test call should re-check each of these against the actual

@@ -281,7 +281,7 @@ def startup():
 
 class VerifyCustomerRequest(BaseModel):
     call_id: str = Field(..., description="Vapi call id, stable per phone call")
-    phone: str = Field(..., description="Caller phone number, e.g. from Vapi's call.customer.number")
+    dob: str = Field(..., description="Caller's date of birth as stated, in YYYY-MM-DD format")
     last4: str = Field(..., description="Last 4 digits of the loan account as stated by caller")
 
 
@@ -361,7 +361,7 @@ def verify_customer(req: VerifyCustomerRequest):
         return {"result": "blocked", "reason": "call already escalated to a human agent"}
 
     cust = conn.execute(
-        "SELECT * FROM customers WHERE phone=? AND last4=?", (req.phone, req.last4)
+        "SELECT * FROM customers WHERE dob=? AND last4=?", (req.dob, req.last4)
     ).fetchone()
 
     attempts = call["verification_attempts"] + 1

@@ -104,18 +104,14 @@ Browser mic  --(WebRTC, Vapi Web SDK)-->  Vapi (STT -> LLM -> TTS)
 The browser only ever talks to Vapi's servers — never to `backend/main.py`
 directly. Vapi's servers call your `/tools/*` endpoints exactly as they would on
 a real phone call, which is why `backend/main.py` and the tool contracts needed
-**zero changes** for this feature. What changed instead is
-`vapi_config/assistant_config.json`: each tool now carries a `parameters` array
+**zero changes** for this feature. Every tool still carries a `parameters` array
 (Vapi's *static parameters* — see [Vapi's docs](https://docs.vapi.ai/tools/static-variables-and-aliases))
-that injects `call_id` (and, for `verify_customer`, `phone`) straight from
-Vapi's server-trusted call state, invisible to and unforgeable by the model —
-the LLM only ever fills the fields it always filled (`last4`,
-`amount_rupees`, ...). For a real phone call, `phone` resolves from
-the caller's SIP/Twilio caller-ID (`{{customer.number}}`); for a browser Web
-Call there's no telephony signaling, so the dashboard passes the selected
-customer's phone in via `assistantOverrides.variableValues.customer_phone`
-when it starts the call, and the tool's static parameter falls back to it
-(`{{customer_phone | default: customer.number}}`).
+that injects `call_id` straight from Vapi's server-trusted call state, invisible
+to and unforgeable by the model. `verify_customer` itself takes no static
+parameters at all — both of its factors (`dob`, `last4`) are ordinary
+LLM-filled fields spoken by the caller, so a browser Web Call needs nothing
+telephony-specific to run verification; only `customer_name` is passed in via
+`assistantOverrides.variableValues` for the greeting.
 
 **Setup:**
 1. Deploy the assistant once (§ Vapi Configuration below) so you have a
@@ -195,7 +191,7 @@ per-field editing): open `vapi_config/assistant_config.rendered.json` after runn
 the script above, and copy values manually — the system prompt (`model.messages[0].content`)
 goes in the assistant's prompt/instructions field, and each entry in `model.tools`
 goes into the Tools tab (name, parameters schema, server URL, and any static
-body fields like `call_id`/`phone`).
+body fields like `call_id`).
 
 **Testing against a real call without deploying anywhere:** use an ngrok tunnel
 instead of a cloud deploy — `uvicorn main:app --reload --port 8000` in one terminal,
@@ -219,7 +215,7 @@ restart" gotcha) in `docs/VAPI_DEPLOYMENT.md` §1.
 
 | Tool | Purpose | Gate |
 |---|---|---|
-| `verify_customer` | Match caller's phone number AND stated last 4 digits of the loan account against the account on file (both required) | 2-attempt cap per call |
+| `verify_customer` | Match caller's stated date of birth AND last 4 digits of the loan account against the account on file (both required, both spoken by the caller — no caller-ID/phone dependency) | 2-attempt cap per call |
 | `log_promise_to_pay` (alias `log_ptp`) | Record an agreed amount + due date | Requires `status='verified'`; rejects offers below the account's floor |
 | `send_payment_link` | Generate a payment link | Requires `status='verified'` |
 | `edge_case` | Log dispute / hardship / wrong_person / hostile / request_human / cease_contact / voicemail / already_paid / callback_requested | `callback_requested` requires both `callback_date` and `callback_time` |
@@ -230,9 +226,9 @@ Full request/response schemas: `docs/HLD.md` §6.
 **Adding a customer.** The five tools above are what Maya calls mid-call — none of
 them create accounts. To add a new mock loan account:
 - **Dashboard:** Customers tab → "➕ Add a customer" form (name, DOB, last 4, phone,
-  loan type, overdue EMI, days past due, settlement floor — name and DOB are stored
-  for record-keeping but not checked by `verify_customer`, which matches on phone +
-  last 4 together). There's a matching "🗑️ Remove a customer" expander below it.
+  loan type, overdue EMI, days past due, settlement floor — name and phone are stored
+  for record-keeping and display only; `verify_customer` matches on DOB + last 4
+  together). There's a matching "🗑️ Remove a customer" expander below it.
 - **Directly:** `POST {BACKEND_URL}/api/customers` with the same fields (see
   `CreateCustomerRequest` in `backend/main.py`), e.g.:
   ```bash
@@ -242,8 +238,9 @@ them create accounts. To add a new mock loan account:
     "overdue_amount_rupees": 5000, "days_past_due": 8, "min_settlement_pct": 100
   }'
   ```
-  Phone number must be unique (returns `409` otherwise) — it's the lookup key
-  `verify_customer` matches against. This is an ops/admin action (`/api/customers`),
+  Phone number must still be unique (returns `409` otherwise) — it's kept as a
+  contact/record-keeping field, but `verify_customer` itself looks up by
+  `dob` + `last4`. This is an ops/admin action (`/api/customers`),
   not a Vapi tool — Maya never creates accounts mid-call.
 
 ## Authentication and State Enforcement
@@ -394,8 +391,9 @@ Telephony → Vapi → Maya → Backend tools → SQLite → Dashboard.
 
 - Wire up Vapi's call-lifecycle webhooks (`call.started`/`call.ended`) to populate
   duration, latency, and drop-rate metrics in the dashboard.
-- Add phone-number normalization to `verify_customer` (currently an exact string
-  match against `customers.phone`).
+- Add DOB format/locale normalization to `verify_customer` (currently an exact
+  string match against `customers.dob` in `YYYY-MM-DD`, so an STT transcript in a
+  different format would fail to match even if correct).
 - Log tool *failures* (403/422s) as their own event kind, not just successful
   mutations, for a real tool-failure-rate metric.
 - Add signed-webhook verification on `/tools/*` so the backend only accepts calls

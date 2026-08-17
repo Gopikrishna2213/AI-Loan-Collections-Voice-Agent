@@ -301,19 +301,18 @@ with tab_sim:
 
     if picked_label != "-- custom / wrong answers --":
         picked = phone_options[picked_label]
-        default_phone, default_name, default_dob, default_last4 = picked["phone"], picked["full_name"], picked["dob"], picked["last4"]
+        default_name, default_dob, default_last4 = picked["full_name"], picked["dob"], picked["last4"]
     else:
-        default_phone, default_name, default_dob, default_last4 = "+919800000099", "Someone Wrong", "2000-01-01", "0000"
+        default_name, default_dob, default_last4 = "Someone Wrong", "2000-01-01", "0000"
 
-    v1, v2, v3, v4 = st.columns(4)
-    phone = v1.text_input("Phone (from caller ID)", value=default_phone)
-    full_name = v2.text_input("Stated full name", value=default_name)
-    dob = v3.text_input("Stated DOB (YYYY-MM-DD)", value=default_dob)
-    last4 = v4.text_input("Stated last 4 (loan a/c)", value=default_last4)
+    v1, v2, v3 = st.columns(3)
+    full_name = v1.text_input("Stated full name", value=default_name)
+    dob = v2.text_input("Stated DOB (YYYY-MM-DD)", value=default_dob)
+    last4 = v3.text_input("Stated last 4 (loan a/c)", value=default_last4)
 
     if st.button("▶️ Call verify_customer"):
         status, body = api_post("/tools/verify_customer", {
-            "call_id": call_id, "phone": phone, "full_name": full_name, "dob": dob, "last4": last4,
+            "call_id": call_id, "dob": dob, "last4": last4,
         })
         st.json(body)
         if body.get("result") == "verified":

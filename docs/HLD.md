@@ -29,10 +29,11 @@ disposition.
 
 **What the AI agent does, concretely.**
 1. Introduces itself and Kapture Finance without stating any account details.
-2. Verifies the caller (phone number + last 4 digits of the loan account, both must
-   match the same customer record — this was originally a 4-factor check including
-   full name and DOB as well; those two were deliberately dropped, keeping phone +
-   last4 as the current two-factor check. See §7 for why.
+2. Verifies the caller (date of birth + last 4 digits of the loan account, both
+   spoken by the caller and both must match the same customer record — this was
+   originally a 4-factor check including full name and phone number as well; those
+   two were deliberately dropped, keeping DOB + last4 as the current two-factor
+   check, both independent of caller-ID/telephony. See §7 for why.
 3. Only on a successful match, discloses the loan type, overdue EMI amount, and days
    past due.
 4. Determines intent (will pay, hardship, dispute, already paid, callback, wrong
@@ -176,13 +177,13 @@ FAILED_VERIFICATION (status='failed_verification')              │  days_past_d
 | Transition | Condition (as implemented) |
 |---|---|
 | `CALL_STARTED` → any tool call | First tool call for a `call_id` implicitly creates the row (`ensure_call()`), `status='in_progress'`. |
-| `VERIFY_IDENTITY` → `AUTHENTICATED` | `POST /tools/verify_customer` looks a customer up by `phone` AND `last4` together (`WHERE phone=? AND last4=?`) — both must match the same row; name/DOB are not checked. Sets `status='verified'`. **This is the only transition that unlocks debt disclosure.** |
+| `VERIFY_IDENTITY` → `AUTHENTICATED` | `POST /tools/verify_customer` looks a customer up by `dob` AND `last4` together (`WHERE dob=? AND last4=?`) — both must match the same row; name/phone are not checked. Sets `status='verified'`. **This is the only transition that unlocks debt disclosure.** |
 | `VERIFY_IDENTITY` → retry | Match fails and `verification_attempts < 2`. Returns `{"result": "failed", "attempts_remaining": ...}`; caller may try once more. |
 | `VERIFY_IDENTITY` → `FAILED_VERIFICATION` | Match fails on the 2nd attempt. `status='failed_verification'`. No further verification attempts are accepted for this `call_id` (a 3rd `verify_customer` call still just fails the same way — nothing re-opens the gate). |
 | `AUTHENTICATED` → `DEBT_DISCLOSURE` | Implicit — the `verify_customer` response itself carries `full_name`, `loan_type`, `overdue_amount_rupees`, `days_past_due` only when `result == "verified"`. The agent is instructed to speak these (using the returned `full_name`, not any name assumed earlier in the call); the backend has already decided whether it was allowed to know them. |
 | `INTENT_DETECTION` → `WILL_PAY` branch | Agent calls `log_promise_to_pay`. Backend requires `status == 'verified'` (`require_verified()`, HTTP 403 otherwise) and `amount_rupees >= floor` (`overdue_amount_rupees * min_settlement_pct / 100`), else returns `{"result": "rejected", ...}` without logging anything. |
 | → `send_payment_link` (optional, inside `WILL_PAY`) | Also requires `status == 'verified'`. |
-| → `HARDSHIP` / `DISPUTE` / `WRONG_PERSON` / `HOSTILE` / `REQUEST_HUMAN` / `DO_NOT_CALL` (`cease_contact`) / `ALREADY_PAID` | Agent calls `edge_case` with the matching `kind`. `hostile`, `request_human`, `dispute_debt`, and `already_paid` set `status='escalated'`. `cease_contact` additionally sets `customers.cease_contact = 1` **permanently** (so a future call to the same phone number is auto-blocked from debt disclosure at `verify_customer` time — see §7) and `status='closed'`. |
+| → `HARDSHIP` / `DISPUTE` / `WRONG_PERSON` / `HOSTILE` / `REQUEST_HUMAN` / `DO_NOT_CALL` (`cease_contact`) / `ALREADY_PAID` | Agent calls `edge_case` with the matching `kind`. `hostile`, `request_human`, `dispute_debt`, and `already_paid` set `status='escalated'`. `cease_contact` additionally sets `customers.cease_contact = 1` **permanently** (so a future call that verifies against that same customer record — i.e. matches their DOB + last4 again — is auto-blocked from debt disclosure at `verify_customer` time — see §7) and `status='closed'`. |
 | → `CALLBACK_REQUESTED` | Agent calls `edge_case` with `kind='callback_requested'`. Backend **requires** both `callback_date` and `callback_time` in the request — returns HTTP 422 if either is missing — and stores them on the `calls` row. |
 | `NO_RESPONSE` | No dedicated tool; the agent is instructed to call `mark_disposition` directly with `NO_RESPONSE` after reasonable silence, or `voicemail` via `edge_case` if it reached a machine. |
 | Any branch → `DISPOSITION` | Agent calls `mark_disposition` with one of the 12 enum values. **Independently of everything above**, the backend refuses to record a debt-related disposition (`PROMISE_TO_PAY`, `PAYMENT_LINK_SENT`, `ALREADY_PAID`, `DISPUTE`, `HARDSHIP`, `CALLBACK_REQUESTED`) unless `calls.customer_id` is set — i.e., unless this call actually completed verification at some point, regardless of what the model claims happened. HTTP 403 otherwise. |
@@ -242,7 +243,7 @@ the actual shapes returned by the code, not illustrative examples.
 ### `verify_customer`
 - **Purpose:** The verification gate. Must be called, and must return `result:
   "verified"`, before any other tool will disclose or act on debt information.
-- **Input schema:** `{call_id: str, phone: str, last4: str}` — both `phone` and `last4` are required and both must match the same customer record. `phone` comes from Vapi's static parameter (`{{customer_phone | default: customer.number}}`), not spoken by the caller.
+- **Input schema:** `{call_id: str, dob: str, last4: str}` — both `dob` (YYYY-MM-DD) and `last4` are required and both must match the same customer record. Both are ordinary LLM-filled parameters, spoken by the caller — there is no server-trusted (caller-ID/phone) factor in this verification scheme, so it works identically on a real phone call and a browser Web Call.
 - **Output schema (success):** `{result: "verified", customer_id, full_name, loan_type, overdue_amount_rupees, days_past_due, min_settlement_rupees}`
 - **Output schema (other outcomes):** `{result: "failed", attempts_remaining: int}` · `{result: "failed_max_attempts", instruction: str}` · `{result: "verified_but_do_not_contact", customer_id, instruction: str}` · `{result: "blocked", reason: str}`
 - **Auth/state requirement:** none to *call* it (it's how verification happens), but it enforces a 2-attempt cap per `call_id` and refuses to re-run on an already-escalated call.
@@ -283,7 +284,7 @@ the actual shapes returned by the code, not illustrative examples.
 - **Route:** `POST /api/customers` (create), `DELETE /api/customers/{customer_id}` (remove). Deliberately under `/api/*`, not `/tools/*` — Maya never calls this mid-call; it's exposed for the dashboard's "Add Customer" form and for direct `curl` use.
 - **Input schema (create):** `{full_name, dob: "YYYY-MM-DD", last4, phone, loan_type?, overdue_amount_rupees, days_past_due, min_settlement_pct?}`
 - **Output schema:** `{result: "created", customer_id}` · `{result: "deleted", customer_id}`
-- **Auth/state requirement:** none (this is an ops action on the mock account list, not a debt-disclosure path — no verification concept applies to creating a record). `phone` must be unique — it's the same lookup key `verify_customer` matches against.
+- **Auth/state requirement:** none (this is an ops action on the mock account list, not a debt-disclosure path — no verification concept applies to creating a record). `phone` must still be unique (kept as a contact/record-keeping field), even though `verify_customer` itself now matches on `dob` + `last4`, not `phone`.
 - **Failure behavior:** `POST` returns **HTTP 409** if the phone number is already in use; `DELETE` returns **HTTP 404** for an unknown `customer_id`. Deleting a customer does not touch any `calls`/`ptps`/`events` rows already logged against that `customer_id` — historical records are preserved even if the account itself is removed.
 
 ---
@@ -291,30 +292,37 @@ the actual shapes returned by the code, not illustrative examples.
 ## 7. Authentication and Data Safety
 
 **Identity verification.** Originally four factors (full legal name, date of birth,
-phone, and last 4 digits). This went through two revisions during development:
-it was first simplified to last-4-only (no phone check at all), then phone was
-added back in — the current check is **two factors**: `phone` AND `last4` must both
-match the same customer record (`SELECT * FROM customers WHERE phone=? AND last4=?`).
-Full name and DOB are still stored on the customer record but are not read by
+phone, and last 4 digits). This went through three revisions during development:
+first simplified to last-4-only (no second factor at all), then phone was added
+back in as a second factor, and finally phone was replaced with date of birth —
+the current check is **two factors**: `dob` AND `last4` must both match the same
+customer record (`SELECT * FROM customers WHERE dob=? AND last4=?`). Full name and
+phone are still stored on the customer record but are not read by
 `verify_customer`.
-- **Why phone was brought back:** last-4-only meant any caller who knew or guessed a
-  correct 4-digit sequence (10,000 possibilities) could be verified as whichever
-  customer happened to have that last4, with no binding to who was actually calling.
-  Requiring phone too restores that binding — the caller now has to both control the
-  right phone number (or, for Web Call testing, have it explicitly set via
-  `variableValues`) and know the right last4.
-- **What it still doesn't cover:** name and DOB are not checked, so this remains
-  weaker than the original 4-factor design — someone with access to the right phone
-  (e.g. a shared household line) and a correctly guessed last4 would still pass. See
-  §13 for the production recommendation (OTP-based out-of-band verification) if this
-  matters for a real deployment.
-- **Testing caveat:** the dashboard's built-in "Talk" test button does not set the
-  `customer_phone` variable, so `phone` arrives as an unresolved placeholder and
-  verification will always fail from that path now. Test through `webcall.html`
-  (which does set it) or a real phone call instead.
+- **Why phone was replaced, not kept as a third factor:** the phone-based scheme
+  relied on Vapi's caller-ID (`{{customer.number}}`) as a server-trusted, unforgeable
+  signal — strong for a real phone call, but it meant Web Call testing had to fake a
+  phone number via `variableValues`, and it added a dependency (telephony signaling)
+  that a channel-agnostic verification scheme shouldn't need. DOB is, like last4, an
+  ordinary spoken secret: it removes the telephony dependency entirely and keeps the
+  check consistent across every call path (phone, Web Call, or any future channel),
+  at the cost of no longer having an unforgeable factor in the mix — see the next
+  bullet.
+- **What it still doesn't cover:** name is not checked, and both DOB and last4 are
+  spoken/guessable rather than tied to a channel property like caller-ID. Someone who
+  knows or correctly guesses a customer's DOB and last4 (10,000 possibilities for the
+  latter) would still pass, with no requirement that they're calling from any
+  particular line. This is a deliberate trade of the caller-ID binding for
+  channel-independence; see §13 for the production recommendation (OTP-based
+  out-of-band verification) if a stronger, unforgeable factor matters for a real
+  deployment.
+- **Testing note:** because verification no longer depends on any Vapi static
+  parameter, the dashboard's built-in "Talk" test button and `webcall.html` both work
+  identically for verification — there's no `customer_phone`/caller-ID plumbing left
+  to get right for this tool.
 
-**Verification attempts.** Two attempts per `call_id`, unchanged by the phone+last4
-factor changes above. `calls.verification_attempts` increments on every failed
+**Verification attempts.** Two attempts per `call_id`, unchanged by the phone→DOB
+factor change above. `calls.verification_attempts` increments on every failed
 match. On the 2nd failure, `calls.status` is set to `failed_verification` and stays
 there — a 3rd `verify_customer` call for the same `call_id` is still evaluated
 (there's no separate lockout error), but it can't move the call to `verified` in a
@@ -328,8 +336,8 @@ discuss anything account-specific, and — after max attempts — offer a callba
 verified channel and record `FAILED_VERIFICATION`.
 
 **No debt disclosure to third parties — the wrong-person scenario.** If the person who
-answers isn't calling from the account holder's phone, or doesn't know the correct
-last4, verification will not match, and the failure branch above applies. **no debt information is ever returned by
+answers doesn't know the correct DOB and last4 together, verification will not
+match, and the failure branch above applies. **no debt information is ever returned by
 `verify_customer` on a non-match, structurally** — the response schema for a failed
 match (`{"result": "failed", "attempts_remaining": ...}`) has no field for loan type,
 amount, or due date at all. Concretely:
@@ -367,7 +375,7 @@ backend-level, protection; see §13 for closing that gap in production).
 
 **Do-Not-Call persistence.** `cease_contact` is a column on `customers`, not `calls` —
 so once set (via `edge_case(kind='cease_contact')`), it survives across every future
-call to that phone number. `verify_customer` checks it on every future verified match
+call that verifies against that same customer record. `verify_customer` checks it on every future verified match
 and returns `verified_but_do_not_contact` instead of the debt fields, instructing the
 agent to end the call without discussing the debt at all.
 
@@ -525,8 +533,9 @@ code.
 - **Authentication hardening:** hard-lock a `call_id` after 2 failed attempts at the
   database level (today a 3rd `verify_customer` call is still evaluated against the
   same data, it just can't succeed any more easily); consider a secondary
-  out-of-band verification channel (OTP to registered mobile) instead of
-  knowledge-based (last-4 alone, currently the only factor — see §7) verification.
+  out-of-band verification channel (OTP to registered mobile) in addition to the
+  current knowledge-based factors (DOB + last-4, both spoken — see §7), since neither
+  is bound to an unforgeable channel property the way caller-ID would be.
 - **Regulatory controls:** encode permitted-calling-hours, consent/recording
   disclosure, and jurisdiction-specific collections rules (e.g., RBI's Fair Practices
   Code equivalents) as backend guardrails — e.g., a tool call rejected outside allowed
@@ -534,7 +543,8 @@ code.
   calling hours are a stated assumption only, per §8).
 - **Monitoring:** log tool *failures* (403/422 responses), not just successes, as
   their own event kind, and alert on anomalies (e.g., a spike in failed verifications
-  from one phone number).
+  attempting the same customer record, or the same DOB/last4 pair across many
+  different `call_id`s).
 - **Audit logging:** the current `events` table is a good start but has no
   tamper-evidence (no hash chaining, no write-once storage) and no structured field
   for who/what triggered the mutation beyond `call_id` — production audit logging for

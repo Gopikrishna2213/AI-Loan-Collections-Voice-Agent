@@ -29,9 +29,10 @@ disposition.
 
 **What the AI agent does, concretely.**
 1. Introduces itself and Kapture Finance without stating any account details.
-2. Verifies the caller (last 4 digits of the loan account only — this was originally a
-   3-factor check against name + DOB + phone as well, but that was deliberately
-   simplified to last-4-only; see §7 for why and the trade-off it accepts).
+2. Verifies the caller (phone number + last 4 digits of the loan account, both must
+   match the same customer record — this was originally a 4-factor check including
+   full name and DOB as well; those two were deliberately dropped, keeping phone +
+   last4 as the current two-factor check. See §7 for why.
 3. Only on a successful match, discloses the loan type, overdue EMI amount, and days
    past due.
 4. Determines intent (will pay, hardship, dispute, already paid, callback, wrong
@@ -175,7 +176,7 @@ FAILED_VERIFICATION (status='failed_verification')              │  days_past_d
 | Transition | Condition (as implemented) |
 |---|---|
 | `CALL_STARTED` → any tool call | First tool call for a `call_id` implicitly creates the row (`ensure_call()`), `status='in_progress'`. |
-| `VERIFY_IDENTITY` → `AUTHENTICATED` | `POST /tools/verify_customer` looks a customer up by `last4` alone (no phone/name/DOB check) — the first row in `customers` whose `last4` matches. Sets `status='verified'`. **This is the only transition that unlocks debt disclosure.** See §7 for the collision risk this accepts. |
+| `VERIFY_IDENTITY` → `AUTHENTICATED` | `POST /tools/verify_customer` looks a customer up by `phone` AND `last4` together (`WHERE phone=? AND last4=?`) — both must match the same row; name/DOB are not checked. Sets `status='verified'`. **This is the only transition that unlocks debt disclosure.** |
 | `VERIFY_IDENTITY` → retry | Match fails and `verification_attempts < 2`. Returns `{"result": "failed", "attempts_remaining": ...}`; caller may try once more. |
 | `VERIFY_IDENTITY` → `FAILED_VERIFICATION` | Match fails on the 2nd attempt. `status='failed_verification'`. No further verification attempts are accepted for this `call_id` (a 3rd `verify_customer` call still just fails the same way — nothing re-opens the gate). |
 | `AUTHENTICATED` → `DEBT_DISCLOSURE` | Implicit — the `verify_customer` response itself carries `full_name`, `loan_type`, `overdue_amount_rupees`, `days_past_due` only when `result == "verified"`. The agent is instructed to speak these (using the returned `full_name`, not any name assumed earlier in the call); the backend has already decided whether it was allowed to know them. |
@@ -241,7 +242,7 @@ the actual shapes returned by the code, not illustrative examples.
 ### `verify_customer`
 - **Purpose:** The verification gate. Must be called, and must return `result:
   "verified"`, before any other tool will disclose or act on debt information.
-- **Input schema:** `{call_id: str, phone: str | null, last4: str}` — `phone` is still accepted (Vapi always sends it as a static parameter) but is **no longer used for matching or validation**; only `last4` determines the match. See §7 for why this was simplified and what it trades away.
+- **Input schema:** `{call_id: str, phone: str, last4: str}` — both `phone` and `last4` are required and both must match the same customer record. `phone` comes from Vapi's static parameter (`{{customer_phone | default: customer.number}}`), not spoken by the caller.
 - **Output schema (success):** `{result: "verified", customer_id, full_name, loan_type, overdue_amount_rupees, days_past_due, min_settlement_rupees}`
 - **Output schema (other outcomes):** `{result: "failed", attempts_remaining: int}` · `{result: "failed_max_attempts", instruction: str}` · `{result: "verified_but_do_not_contact", customer_id, instruction: str}` · `{result: "blocked", reason: str}`
 - **Auth/state requirement:** none to *call* it (it's how verification happens), but it enforces a 2-attempt cap per `call_id` and refuses to re-run on an already-escalated call.
@@ -289,27 +290,31 @@ the actual shapes returned by the code, not illustrative examples.
 
 ## 7. Authentication and Data Safety
 
-**Identity verification.** Originally three factors (full legal name, date of birth,
-and last 4 digits, matched against the record found by phone number). This was
-deliberately simplified to **one factor**: the last 4 digits of the loan account,
-looked up directly (`SELECT * FROM customers WHERE last4=?`, first match wins) —
-phone, name, and DOB are no longer read by `verify_customer` at all, though they
-remain stored on the customer record. This trade-off was made explicitly, not by
-accident:
-- **Why:** repeated live testing showed the 3-factor + phone-lookup combination
-  producing verification failures that were hard to diagnose (stale local DB state,
-  phone-format mismatches between what Vapi sends and what's seeded), which blocked
-  testing more than it protected anything in a mock system. Removing phone and
-  the two extra factors was a deliberate simplification for this prototype.
-- **What it costs:** last4 alone is a weak identity check — 10,000 possible values,
-  no longer bound to a specific phone number at all, and if two customer records
-  ever shared the same `last4`, the lookup returns whichever row SQLite finds first
-  with no disambiguation. For a real financial-services deployment disclosing debt
-  details, this is meaningfully weaker than the original 3-factor design, and should
-  be revisited before production — see §13.
+**Identity verification.** Originally four factors (full legal name, date of birth,
+phone, and last 4 digits). This went through two revisions during development:
+it was first simplified to last-4-only (no phone check at all), then phone was
+added back in — the current check is **two factors**: `phone` AND `last4` must both
+match the same customer record (`SELECT * FROM customers WHERE phone=? AND last4=?`).
+Full name and DOB are still stored on the customer record but are not read by
+`verify_customer`.
+- **Why phone was brought back:** last-4-only meant any caller who knew or guessed a
+  correct 4-digit sequence (10,000 possibilities) could be verified as whichever
+  customer happened to have that last4, with no binding to who was actually calling.
+  Requiring phone too restores that binding — the caller now has to both control the
+  right phone number (or, for Web Call testing, have it explicitly set via
+  `variableValues`) and know the right last4.
+- **What it still doesn't cover:** name and DOB are not checked, so this remains
+  weaker than the original 4-factor design — someone with access to the right phone
+  (e.g. a shared household line) and a correctly guessed last4 would still pass. See
+  §13 for the production recommendation (OTP-based out-of-band verification) if this
+  matters for a real deployment.
+- **Testing caveat:** the dashboard's built-in "Talk" test button does not set the
+  `customer_phone` variable, so `phone` arrives as an unresolved placeholder and
+  verification will always fail from that path now. Test through `webcall.html`
+  (which does set it) or a real phone call instead.
 
-**Verification attempts.** Two attempts per `call_id`, unchanged by the last4-only
-simplification above. `calls.verification_attempts` increments on every failed
+**Verification attempts.** Two attempts per `call_id`, unchanged by the phone+last4
+factor changes above. `calls.verification_attempts` increments on every failed
 match. On the 2nd failure, `calls.status` is set to `failed_verification` and stays
 there — a 3rd `verify_customer` call for the same `call_id` is still evaluated
 (there's no separate lockout error), but it can't move the call to `verified` in a
@@ -323,10 +328,8 @@ discuss anything account-specific, and — after max attempts — offer a callba
 verified channel and record `FAILED_VERIFICATION`.
 
 **No debt disclosure to third parties — the wrong-person scenario.** If the person who
-answers doesn't know the correct last4, verification will not match, and the failure
-branch above applies. (Note: since last4 is the only factor now, someone who *does*
-know or guess the correct last4 — even without being the account holder — will pass
-verification; this is the direct cost of the simplification described above.) **no debt information is ever returned by
+answers isn't calling from the account holder's phone, or doesn't know the correct
+last4, verification will not match, and the failure branch above applies. **no debt information is ever returned by
 `verify_customer` on a non-match, structurally** — the response schema for a failed
 match (`{"result": "failed", "attempts_remaining": ...}`) has no field for loan type,
 amount, or due date at all. Concretely:

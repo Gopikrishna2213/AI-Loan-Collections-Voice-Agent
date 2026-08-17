@@ -150,14 +150,52 @@ anywhere in source).
 ## Vapi Configuration
 
 `vapi_config/assistant_config.json` is a **template** (`{{BACKEND_URL}}`,
-`{{VOICE_ID}}` placeholders) — render it before using:
+`{{VOICE_ID}}` placeholders) — it is never valid to paste into Vapi as-is. Render it
+first with `scripts/render_vapi_config.py`, which produces the real, usable config.
+
+**What `scripts/render_vapi_config.py` actually does:**
+1. Reads `vapi_config/assistant_config.json` (the template).
+2. Substitutes `{{BACKEND_URL}}` and `{{VOICE_ID}}` with the values of the
+   `BACKEND_URL` and `VAPI_VOICE_ID` environment variables — both are **required**;
+   the script exits with an error listing whichever is missing rather than silently
+   writing a broken config.
+3. Strips the template-only `note` field (instructions for humans, not part of the
+   real Vapi schema).
+4. Writes the result to `vapi_config/assistant_config.rendered.json` (gitignored —
+   never commit this, since it embeds your real backend URL).
+5. If `--deploy` is passed **and** `VAPI_API_KEY` is set, it also pushes the rendered
+   config straight to Vapi's API: `POST /assistant` (creates a new assistant) if
+   `VAPI_ASSISTANT_ID` isn't set, or `PATCH /assistant/{id}` (updates the existing
+   one) if it is. Without `--deploy`, or without `VAPI_API_KEY`, it only writes the
+   local file and prints a reminder to either set `VAPI_API_KEY` or paste the file
+   into the dashboard manually.
+
+**Run it from the project root** (the folder containing `scripts/`, `vapi_config/`,
+`backend/`, etc.) — the script locates its input/output paths relative to its own
+file location, so it works the same whether you run it as `python
+scripts/render_vapi_config.py` from the root or `python render_vapi_config.py` from
+inside `scripts/`.
 
 ```bash
 export BACKEND_URL=https://your-deployed-backend.example.com
 export VAPI_VOICE_ID=your-elevenlabs-voice-id
 python scripts/render_vapi_config.py
 # -> vapi_config/assistant_config.rendered.json (gitignored)
+
+# optional: push it straight to Vapi instead of pasting manually
+export VAPI_API_KEY=sk_...
+export VAPI_ASSISTANT_ID=...   # omit on first deploy; the script prints one to save
+python scripts/render_vapi_config.py --deploy
 ```
+
+(PowerShell: use `$env:BACKEND_URL = "..."` etc. instead of `export`.)
+
+**If your Vapi dashboard has no raw-JSON import** (some UI versions only expose
+per-field editing): open `vapi_config/assistant_config.rendered.json` after running
+the script above, and copy values manually — the system prompt (`model.messages[0].content`)
+goes in the assistant's prompt/instructions field, and each entry in `model.tools`
+goes into the Tools tab (name, parameters schema, server URL, and any static
+body fields like `call_id`/`phone`).
 
 **Testing against a real call without deploying anywhere:** use an ngrok tunnel
 instead of a cloud deploy — `uvicorn main:app --reload --port 8000` in one terminal,
@@ -181,7 +219,7 @@ restart" gotcha) in `docs/VAPI_DEPLOYMENT.md` §1.
 
 | Tool | Purpose | Gate |
 |---|---|---|
-| `verify_customer` | Match caller's stated last 4 digits of the loan account against the account on file | 2-attempt cap per call |
+| `verify_customer` | Match caller's phone number AND stated last 4 digits of the loan account against the account on file (both required) | 2-attempt cap per call |
 | `log_promise_to_pay` (alias `log_ptp`) | Record an agreed amount + due date | Requires `status='verified'`; rejects offers below the account's floor |
 | `send_payment_link` | Generate a payment link | Requires `status='verified'` |
 | `edge_case` | Log dispute / hardship / wrong_person / hostile / request_human / cease_contact / voicemail / already_paid / callback_requested | `callback_requested` requires both `callback_date` and `callback_time` |
@@ -192,10 +230,9 @@ Full request/response schemas: `docs/HLD.md` §6.
 **Adding a customer.** The five tools above are what Maya calls mid-call — none of
 them create accounts. To add a new mock loan account:
 - **Dashboard:** Customers tab → "➕ Add a customer" form (name, DOB, last 4, phone,
-  loan type, overdue EMI, days past due, settlement floor — DOB and phone are still
-  stored for record-keeping, but are no longer checked by `verify_customer`, which
-  now matches on last 4 digits alone). There's a matching
-  "🗑️ Remove a customer" expander below it.
+  loan type, overdue EMI, days past due, settlement floor — name and DOB are stored
+  for record-keeping but not checked by `verify_customer`, which matches on phone +
+  last 4 together). There's a matching "🗑️ Remove a customer" expander below it.
 - **Directly:** `POST {BACKEND_URL}/api/customers` with the same fields (see
   `CreateCustomerRequest` in `backend/main.py`), e.g.:
   ```bash

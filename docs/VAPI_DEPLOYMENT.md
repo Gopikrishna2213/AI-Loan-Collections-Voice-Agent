@@ -163,9 +163,10 @@ curl -s $BACKEND_URL/health
    this repo doesn't wrap one).
 3. Call the number, or trigger an outbound call to your own phone.
 4. Answer, and go through the PTP scenario in §5 of `README.md` / Task 5 of the
-   assignment: confirm you're Rahul Sharma, verify with last 4 `4321` (that's the
-   only field asked for now — phone/DOB/name are no longer checked), hear the EMI
-   disclosed, then say "I can pay tomorrow" / "₹8,499".
+   assignment: confirm you're Rahul Sharma, verify with last 4 `4321` — this must be
+   called from/as `+919876543210` (Rahul's seeded phone), since `verify_customer`
+   now requires phone AND last4 to both match — hear the EMI disclosed, then say
+   "I can pay tomorrow" / "₹8,499".
 
 ## 5b. Web Call — testing from the browser instead of a phone
 

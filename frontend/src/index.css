@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: #1e1b4b;
+  /* Radiant background: layered colour glows over a soft base */
+  background-color: #f5f3ff;
+  background-image:
+    radial-gradient(at 8% 12%,  #c4b5fd 0px, transparent 45%),
+    radial-gradient(at 92% 8%,  #7dd3fc 0px, transparent 42%),
+    radial-gradient(at 85% 88%, #f9a8d4 0px, transparent 45%),
+    radial-gradient(at 12% 90%, #fde68a 0px, transparent 40%),
+    radial-gradient(at 50% 50%, #ddd6fe 0px, transparent 55%);
+  background-attachment: fixed;
+}
+
+@layer components {
+  .glass {
+    @apply rounded-2xl border border-white/70 bg-white/60 shadow-lg shadow-indigo-900/5 backdrop-blur-xl;
+  }
+  .input {
+    @apply w-full rounded-xl border border-white/80 bg-white/80 px-3.5 py-2.5 text-sm text-slate-800
+           placeholder-slate-400 outline-none transition
+           focus:border-violet-400 focus:ring-2 focus:ring-violet-300/60;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow-md shadow-violet-500/30 hover:brightness-110;
+  }
+  .btn-soft {
+    @apply btn border border-white/80 bg-white/70 text-slate-700 hover:bg-white;
+  }
+  .btn-danger {
+    @apply btn border border-rose-200 bg-rose-50/80 text-rose-700 hover:bg-rose-100;
+  }
+}

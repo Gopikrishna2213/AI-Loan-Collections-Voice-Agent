@@ -1,7 +1,7 @@
 # Maya — AI Voice Collections Agent for Kapture Finance
 
 A state-controlled AI voice collections agent: **Vapi (STT/LLM/TTS)** → tool calls →
-**FastAPI mock backend (SQLite)** → **Streamlit control panel**. Built so that the
+**FastAPI mock backend (SQLite)** → **React + Vite + Tailwind control panel**. Built so that the
 one non-negotiable rule — *never disclose debt information before the customer is
 verified* — is enforced in backend code, not just requested in the system prompt.
 
@@ -44,7 +44,7 @@ Browser mic -> Vapi Web SDK ------> Vapi (STT -> LLM -> TTS) -> Maya
         │                           already_paid/callback_requested)
         └── mark_disposition       (final outcome — every call)
    -> SQLite (backend/collections.db)
-   -> Streamlit Dashboard (dashboard/app.py) — Live Monitor + 🎙️ Web Call + Call Simulator
+   -> React frontend (frontend/) — Live Monitor + Web Call + Call Simulator
 ```
 
 Both call paths (real phone call, and the dashboard's browser Web Call) hit the
@@ -58,7 +58,7 @@ full breakdown of what's implemented vs. configured vs. mocked.
 ```
 collections-agent/
 ├── backend/main.py                     FastAPI mock backend — source of truth
-├── dashboard/app.py                    Streamlit monitor + call simulator
+├── frontend/                           React + Vite + Tailwind monitor, web call, simulator, customers
 ├── vapi_config/assistant_config.json   Vapi assistant template + tool schemas + prompt
 ├── scripts/render_vapi_config.py       Substitutes env vars into the Vapi template
 ├── docs/HLD.md, *.pdf, architecture.png, VAPI_DEPLOYMENT.md
@@ -75,10 +75,10 @@ pip install -r requirements.txt
 cd backend && uvicorn main:app --reload --port 8000
 
 # terminal 2 — dashboard
-cd dashboard && BACKEND_URL=http://localhost:8000 streamlit run app.py
+cd frontend && npm install && npm run dev
 ```
 
-Open the Streamlit URL it prints. Use the **Call Simulator** tab to run a full call —
+Open http://localhost:5173. Use the **Call Simulator** tab to run a full call —
 verification, EMI disclosure, negotiation, PTP, payment link, every edge case,
 disposition — without touching Vapi. The **Live Monitor** tab shows exactly what a
 real Vapi call would produce, because it reads the same backend through the same
@@ -88,7 +88,7 @@ browser's microphone — see "Web Call (browser voice call)" below.
 ## Web Call (browser voice call)
 
 The dashboard's **🎙️ Web Call** tab embeds Vapi's browser Web SDK so you can talk
-to the deployed Maya assistant with your microphone, directly from the Streamlit
+to the deployed Maya assistant with your microphone, directly from the React
 page — no phone number required. Architecture:
 
 ```
@@ -119,7 +119,7 @@ telephony-specific to run verification; only `customer_name` is passed in via
 2. Get your **public** key from the Vapi dashboard (Settings → API Keys →
    "Public Key" — not the private key used for `--deploy`).
 3. `export VAPI_PUBLIC_KEY=...` and `export VAPI_ASSISTANT_ID=...` before
-   `streamlit run app.py` (see `.env.example`).
+   `npm run dev` in `frontend/` (see `.env.example`).
 4. Open the **🎙️ Web Call** tab, pick a customer, click **Start AI Voice
    Call**, allow microphone access, and talk. Tool calls appear in the
    **Live Monitor** tab in real time (paste the Call ID the widget shows

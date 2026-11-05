@@ -12,7 +12,7 @@ This is the "FastAPI Backend" box in the architecture diagram. It exposes:
                                        already_paid, callback_requested)
     POST /tools/mark_disposition     (final call outcome — every call path ends here)
 
-  Read endpoints (called BY the Streamlit dashboard, to render state):
+  Read endpoints (called BY the React frontend, to render state):
     GET /api/customers
     GET /api/calls
     GET /api/ptps
@@ -40,12 +40,19 @@ import os
 from typing import Optional, Literal
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "collections.db")
 
 app = FastAPI(title="Kapture Finance — Maya Collections Mock Backend")
+
+# The React frontend (frontend/) calls this API from the browser. In dev the Vite
+# proxy avoids CORS entirely; for a deployed frontend, set CORS_ORIGINS to a
+# comma-separated list (e.g. https://maya-ui.vercel.app). Defaults to "*".
+_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["*"], allow_headers=["*"])
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -555,7 +562,7 @@ def mark_disposition(req: MarkDispositionRequest):
 
 
 # ---------------------------------------------------------------------------
-# Read endpoints — for the Streamlit dashboard
+# Read endpoints — for the React frontend
 # (api_customers has a companion POST/DELETE below it — these are ops/admin
 # actions on the mock account list, not Vapi tools, so they live here rather
 # than under /tools/*.)
